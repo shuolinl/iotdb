@@ -21,6 +21,8 @@ package org.apache.iotdb.db.auth;
 
 import org.apache.iotdb.common.rpc.thrift.TSStatus;
 import org.apache.iotdb.commons.auth.entity.PrivilegeType;
+import org.apache.iotdb.commons.auth.AuthException;
+import org.apache.iotdb.commons.conf.CommonConfig;
 import org.apache.iotdb.commons.conf.CommonDescriptor;
 import org.apache.iotdb.commons.path.PartialPath;
 import org.apache.iotdb.commons.path.PathPatternTree;
@@ -28,13 +30,21 @@ import org.apache.iotdb.commons.service.metric.PerformanceOverviewMetrics;
 import org.apache.iotdb.db.protocol.session.IClientSession;
 import org.apache.iotdb.db.queryengine.plan.statement.AuthorType;
 import org.apache.iotdb.db.queryengine.plan.statement.Statement;
+import org.apache.iotdb.db.queryengine.common.header.ColumnHeader;
+import org.apache.iotdb.db.queryengine.common.header.DatasetHeader;
+import org.apache.iotdb.db.queryengine.plan.execution.config.ConfigTaskResult;
+import org.apache.iotdb.db.queryengine.plan.statement.sys.AuthorStatement;
 import org.apache.iotdb.rpc.TSStatusCode;
+import org.apache.iotdb.tsfile.file.metadata.enums.TSDataType;
+import org.apache.iotdb.tsfile.read.common.block.TsBlockBuilder;
+import org.apache.iotdb.tsfile.utils.Binary;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.google.common.util.concurrent.SettableFuture;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 public class AuthorityChecker {
 
@@ -43,15 +53,22 @@ public class AuthorityChecker {
   private static final String NO_PERMISSION_PROMOTION =
       "No permissions for this operation, please add privilege ";
 
-  private static final Logger logger = LoggerFactory.getLogger(AuthorityChecker.class);
+  private static IAuthorityFetcher authorityFetcher;
 
-  private static final AuthorizerManager authorizerManager = AuthorizerManager.getInstance();
+  private long heartBeatTimeStamp = 0;
+
+  private static final CommonConfig config = CommonDescriptor.getInstance().getConfig();
 
   private static final PerformanceOverviewMetrics PERFORMANCE_OVERVIEW_METRICS =
       PerformanceOverviewMetrics.getInstance();
 
-  private AuthorityChecker() {
-    // Empty constructor
+  /** SingleTon. */
+  private static class AuthorityCheckerHolder {
+    private static final AuthorityChecker INSTANCE = new AuthorityChecker();
+
+    private AuthorityCheckerHolder() {
+      // Empty constructor
+    }
   }
 
   /** Check whether specific Session has the authorization to given plan. */
@@ -104,15 +121,78 @@ public class AuthorityChecker {
     return new TSStatus(TSStatusCode.NO_PERMISSION.getStatusCode()).setMessage(prompt.toString());
   }
 
+  public static AuthorityChecker getInstance() {
+    return AuthorityChecker.AuthorityCheckerHolder.INSTANCE;
+  }
+
+  public AuthorityChecker() {
+    authorityFetcher = new ClusterAuthorityFetcher(new BasicAuthorityCache());
+  }
+
+  public static boolean checkSystemPermission(String username, int permission) {
+    long startTime = System.nanoTime();
+    if (SUPER_USER.equals(username)) {
+      return true;
+    }
+    TSStatus status = authorityFetcher.checkUserSysPrivileges(username, permission);
+    PERFORMANCE_OVERVIEW_METRICS.recordAuthCost(System.nanoTime() - startTime);
+    if (status.getCode() == TSStatusCode.SUCCESS_STATUS.getStatusCode()) {
+      return true;
+    }
+    return false;
+  }
+
+  public boolean invalidateCache(String username, String roleName) {
+    return authorityFetcher.getAuthorCache().invalidateCache(username, roleName);
+  }
+
+  public SettableFuture<ConfigTaskResult> queryPermission(AuthorStatement authorStatement) {
+    return authorityFetcher.queryPermission(authorStatement);
+  }
+
+  public SettableFuture<ConfigTaskResult> operatePermission(AuthorStatement authorStatement) {
+    return authorityFetcher.operatePermission(authorStatement);
+  }
+
+  public void refreshToken() {
+    long currnetTime = System.currentTimeMillis();
+    if (heartBeatTimeStamp == 0) {
+      heartBeatTimeStamp = currnetTime;
+      return;
+    }
+    if (currnetTime - heartBeatTimeStamp > config.getDatanodeTokenTimeoutMS()) {
+      authorityFetcher.setCacheOutDate();
+    }
+  }
+
+
   public static boolean checkFullPathPermission(
       String userName, PartialPath fullPath, int permission) {
-    // TODO
-    return true;
+    long startTime = System.nanoTime();
+    if (SUPER_USER.equals(userName)) {
+      return true;
+    }
+    List<PartialPath> path = new ArrayList<>();
+    path.add(fullPath);
+    TSStatus status = authorityFetcher.checkUserPathPrivileges(userName, path, permission);
+    PERFORMANCE_OVERVIEW_METRICS.recordAuthCost(System.nanoTime() - startTime);
+    if (status.getCode() == TSStatusCode.SUCCESS_STATUS.getStatusCode()) {
+      return true;
+    }
+    return false;
   }
 
   public static List<Integer> checkFullPathListPermission(
       String userName, List<PartialPath> fullPaths, int permission) {
-    // TODO return the index list of no permission fullPaths
+    long startTime = System.nanoTime();
+    if (SUPER_USER.equals(userName)) {
+      return Collections.emptyList();
+    }
+    TSStatus status = authorityFetcher.checkUserPathPrivileges(userName, fullPaths, permission);
+    PERFORMANCE_OVERVIEW_METRICS.recordAuthCost(System.nanoTime() - startTime);
+    if (status.getCode() == TSStatusCode.SUCCESS_STATUS.getStatusCode()) {
+      return Collections.emptyList();
+    }
     return Collections.emptyList();
   }
 
@@ -122,14 +202,10 @@ public class AuthorityChecker {
     return Collections.emptyList();
   }
 
-  public static PathPatternTree getAuthorizedPathTree(String userName, int permission) {
-    // TODO
-    return new PathPatternTree();
-  }
-
-  public static boolean checkSystemPermission(String userName, int permission) {
-    // TODO
-    return true;
+  public static PathPatternTree getAuthorizedPathTree(String userName, int permission) throws AuthException
+  {
+    PathPatternTree pathTree = authorityFetcher.getAuthizedPatternTree(userName, permission);
+    return pathTree;
   }
 
   public static boolean checkGrantOption(
@@ -139,5 +215,34 @@ public class AuthorityChecker {
       AuthorType authorType) {
     // TODO
     return true;
+  }
+
+  public void buildTSBlock(
+      Map<String, List<String>> authorizerInfo, SettableFuture<ConfigTaskResult> future) {
+    List<TSDataType> types = new ArrayList<>();
+    for (int i = 0; i < authorizerInfo.size(); i++) {
+      types.add(TSDataType.TEXT);
+    }
+    TsBlockBuilder builder = new TsBlockBuilder(types);
+    List<ColumnHeader> headerList = new ArrayList<>();
+
+    for (String header : authorizerInfo.keySet()) {
+      headerList.add(new ColumnHeader(header, TSDataType.TEXT));
+    }
+    // The Time column will be ignored by the setting of ColumnHeader.
+    // So we can put a meaningless value here
+    for (String value : authorizerInfo.get(headerList.get(0).getColumnName())) {
+      builder.getTimeColumnBuilder().writeLong(0L);
+      builder.getColumnBuilder(0).writeBinary(new Binary(value));
+      builder.declarePosition();
+    }
+    for (int i = 1; i < headerList.size(); i++) {
+      for (String value : authorizerInfo.get(headerList.get(i).getColumnName())) {
+        builder.getColumnBuilder(i).writeBinary(new Binary(value));
+      }
+    }
+
+    DatasetHeader datasetHeader = new DatasetHeader(headerList, true);
+    future.set(new ConfigTaskResult(TSStatusCode.SUCCESS_STATUS, builder.build(), datasetHeader));
   }
 }

@@ -34,7 +34,6 @@ import org.apache.iotdb.common.rpc.thrift.TTimePartitionSlot;
 import org.apache.iotdb.common.rpc.thrift.TTimedQuota;
 import org.apache.iotdb.common.rpc.thrift.ThrottleType;
 import org.apache.iotdb.commons.auth.AuthException;
-import org.apache.iotdb.commons.auth.entity.PrivilegeType;
 import org.apache.iotdb.commons.consensus.index.impl.MinimumProgressIndex;
 import org.apache.iotdb.commons.exception.IllegalPathException;
 import org.apache.iotdb.commons.partition.DataPartitionTable;
@@ -541,7 +540,6 @@ public class ConfigPhysicalPlanSerDeTest {
     AuthorPlan req0;
     AuthorPlan req1;
     Set<Integer> permissions = new HashSet<>();
-    permissions.add(PrivilegeType.GRANT_PRIVILEGE.ordinal());
 
     // create user
     req0 =
@@ -552,6 +550,7 @@ public class ConfigPhysicalPlanSerDeTest {
             "passwd",
             "",
             new HashSet<>(),
+            false,
             new ArrayList<>());
     req1 = (AuthorPlan) ConfigPhysicalPlan.Factory.create(req0.serializeToByteBuffer());
     Assert.assertEquals(req0, req1);

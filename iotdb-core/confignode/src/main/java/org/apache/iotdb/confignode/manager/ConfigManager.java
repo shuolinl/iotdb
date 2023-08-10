@@ -30,6 +30,7 @@ import org.apache.iotdb.common.rpc.thrift.TSeriesPartitionSlot;
 import org.apache.iotdb.common.rpc.thrift.TSetSpaceQuotaReq;
 import org.apache.iotdb.common.rpc.thrift.TSetThrottleQuotaReq;
 import org.apache.iotdb.common.rpc.thrift.TTimePartitionSlot;
+import org.apache.iotdb.commons.auth.AuthException;
 import org.apache.iotdb.commons.cluster.NodeStatus;
 import org.apache.iotdb.commons.cluster.NodeType;
 import org.apache.iotdb.commons.conf.CommonConfig;
@@ -103,6 +104,7 @@ import org.apache.iotdb.confignode.persistence.quota.QuotaInfo;
 import org.apache.iotdb.confignode.persistence.schema.ClusterSchemaInfo;
 import org.apache.iotdb.confignode.rpc.thrift.TAlterLogicalViewReq;
 import org.apache.iotdb.confignode.rpc.thrift.TAlterSchemaTemplateReq;
+import org.apache.iotdb.confignode.rpc.thrift.TAuthizedPatternTreeResp;
 import org.apache.iotdb.confignode.rpc.thrift.TClusterParameters;
 import org.apache.iotdb.confignode.rpc.thrift.TConfigNodeRegisterReq;
 import org.apache.iotdb.confignode.rpc.thrift.TConfigNodeRegisterResp;
@@ -987,6 +989,26 @@ public class ConfigManager implements IManager {
       return permissionManager.checkUserPrivileges(username, paths, permission);
     } else {
       TPermissionInfoResp resp = AuthUtils.generateEmptyPermissionInfoResp();
+      resp.setStatus(status);
+      return resp;
+    }
+  }
+
+  public TAuthizedPatternTreeResp fetchAuthizedPatternTree(String username, int permission) {
+    TSStatus status = confirmLeader();
+    if (status.getCode() == TSStatusCode.SUCCESS_STATUS.getStatusCode()) {
+      try {
+        return permissionManager.fetchAuthizedPTree(username, permission);
+      } catch (AuthException e) {
+        TAuthizedPatternTreeResp resp = new TAuthizedPatternTreeResp();
+        status
+            .setCode(TSStatusCode.EXECUTE_STATEMENT_ERROR.getStatusCode())
+            .setMessage(e.getMessage());
+        resp.setStatus(status);
+        return resp;
+      }
+    } else {
+      TAuthizedPatternTreeResp resp = new TAuthizedPatternTreeResp();
       resp.setStatus(status);
       return resp;
     }
