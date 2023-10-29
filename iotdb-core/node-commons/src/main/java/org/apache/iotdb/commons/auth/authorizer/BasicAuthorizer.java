@@ -58,6 +58,8 @@ public abstract class BasicAuthorizer implements IAuthorizer, IService {
    * directly.
    */
   // FOR PRE VERSION BEGIN -----
+
+  @Override
   public void checkUserPathPrivilege() {
     userManager.checkAndRefreshPathPri();
     roleManager.checkAndRefreshPathPri();

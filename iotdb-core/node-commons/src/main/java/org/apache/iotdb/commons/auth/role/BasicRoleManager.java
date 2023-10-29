@@ -20,6 +20,8 @@ package org.apache.iotdb.commons.auth.role;
 
 import org.apache.iotdb.commons.auth.AuthException;
 import org.apache.iotdb.commons.auth.entity.PathPrivilege;
+import org.apache.iotdb.commons.auth.entity.PriPrivilegeType;
+import org.apache.iotdb.commons.auth.entity.PrivilegeType;
 import org.apache.iotdb.commons.auth.entity.Role;
 import org.apache.iotdb.commons.concurrent.HashLock;
 import org.apache.iotdb.commons.exception.IllegalPathException;
@@ -31,6 +33,7 @@ import org.apache.iotdb.rpc.TSStatusCode;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -46,6 +49,7 @@ public abstract class BasicRoleManager implements IRoleManager {
   protected Map<String, Role> roleMap;
   protected IRoleAccessor accessor;
   protected HashLock lock;
+  private boolean preVersionToHandle = false;
 
   private boolean preVersion = false;
 
@@ -170,6 +174,11 @@ public abstract class BasicRoleManager implements IRoleManager {
     for (String roleName : accessor.listAllRoles()) {
       try {
         roleMap.put(roleName, accessor.loadRole(roleName));
+        if (!preVersionToHandle) {
+          if (!roleMap.get(roleName).getServiceReady()) {
+            preVersionToHandle = true;
+          }
+        }
       } catch (IOException e) {
         throw new AuthException(TSStatusCode.AUTH_IO_EXCEPTION, e);
       }
@@ -215,28 +224,48 @@ public abstract class BasicRoleManager implements IRoleManager {
 
   @Override
   public void checkAndRefreshPathPri() {
+    if (!preVersionToHandle) {
+      return;
+    }
     roleMap.forEach(
-        (rolename, role) -> {
-          if (!role.getServiceReady()) {
+        (rolename, user) -> {
+          if (!user.getServiceReady()) {
             List<PathPrivilege> priCopy = new ArrayList<>();
-            for (PathPrivilege pathPri : role.getPathPrivilegeList()) {
-              try {
-                AuthUtils.validatePatternPath(pathPri.getPath());
-                priCopy.add(pathPri);
-              } catch (AuthException e) {
+            HashSet<Integer> sysCopy = new HashSet<>();
+            for (PathPrivilege pathPri : user.getPathPrivilegeList()) {
+              for (int permission : pathPri.getPrivileges()) {
+                PriPrivilegeType type = PriPrivilegeType.values()[permission];
                 PartialPath path = pathPri.getPath();
                 try {
-                  for (Integer pri : pathPri.getPrivileges()) {
-                    AuthUtils.addPrivilege(AuthUtils.convertPatternPath(path), pri, priCopy, false);
+                  AuthUtils.validatePatternPath(path);
+                } catch (AuthException e) {
+                  try {
+                    path = AuthUtils.convertPatternPath(path);
+                  } catch (IllegalPathException illegalE) {
+                    String[] str = {"root", "**"};
+                    path = new PartialPath(str);
                   }
-                } catch (IllegalPathException illegalE) {
-                  //
+                }
+
+                for (PrivilegeType item : type.getSubPri()) {
+                  if (item.isPathRelevant()) {
+                    AuthUtils.addPrivilege(path, item.ordinal(), priCopy, false);
+                  } else {
+                    sysCopy.add(item.ordinal());
+                  }
                 }
               }
             }
-            role.setPrivilegeList(priCopy);
+            for (int sysPri : user.getSysPrivilege()) {
+              PriPrivilegeType type = PriPrivilegeType.values()[sysPri];
+              for (PrivilegeType item : type.getSubPri()) {
+                sysCopy.add(item.ordinal());
+              }
+            }
+            user.setPrivilegeList(priCopy);
+            user.setSysPrivilegeSet(sysCopy);
+            user.setServiceReady(true);
           }
-          role.setServiceReady(true);
         });
   }
 }

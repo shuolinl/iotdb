@@ -26,7 +26,6 @@ import org.apache.iotdb.commons.auth.authorizer.IAuthorizer;
 import org.apache.iotdb.commons.auth.authorizer.OpenIdAuthorizer;
 import org.apache.iotdb.commons.auth.entity.PathPrivilege;
 import org.apache.iotdb.commons.auth.entity.PriPrivilegeType;
-import org.apache.iotdb.commons.auth.entity.PrivilegeType;
 import org.apache.iotdb.commons.auth.entity.Role;
 import org.apache.iotdb.commons.auth.entity.User;
 import org.apache.iotdb.commons.conf.CommonConfig;
@@ -60,7 +59,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -77,9 +75,12 @@ public class AuthorInfo implements SnapshotProcessor {
 
   private IAuthorizer authorizer;
 
+  private boolean hasPrePriv = false;
+
   public AuthorInfo() {
     try {
       authorizer = BasicAuthorizer.getInstance();
+
     } catch (AuthException e) {
       LOGGER.error("get user or role permissionInfo failed because ", e);
     }
@@ -184,31 +185,27 @@ public class AuthorInfo implements SnapshotProcessor {
     Set<Integer> permissions = authorPlan.getPermissions();
     boolean grantOpt = authorPlan.getGrantOpt();
     List<PartialPath> nodeNameList = authorPlan.getNodeNameList();
+    // 假设 raft log 是从旧版本到新版本的。 因此在处理旧版本
+
+    // 如果是旧版本，就持续处理就版本的东西
     if (authorType.ordinal() >= ConfigPhysicalPlanType.GrantRoleDep.ordinal()
         && authorType.ordinal() <= ConfigPhysicalPlanType.RevokeRoleFromUserDep.ordinal()) {
-      HashSet<Integer> pricopy = new HashSet<>();
-      // for all privilege. the nodeNameList will be root.**
-      for (int permission : permissions) {
-        PriPrivilegeType type = PriPrivilegeType.values()[permission];
-        if (type.isAccept()) {
-          for (PrivilegeType item : type.getSubPri()) {
-            pricopy.add(item.ordinal());
-          }
-        }
+      authorizer.setUserForPreVersion(true);
+      authorizer.setRoleForPreVersion(true);
+      hasPrePriv = true;
+    } else {
+      if (hasPrePriv) {
+        authorizer.checkUserPathPrivilege();
+        authorizer.setUserForPreVersion(false);
+        authorizer.setRoleForPreVersion(false);
+        hasPrePriv = false;
       }
-      permissions = pricopy;
     }
-
     try {
       switch (authorType) {
         case UpdateUserDep:
-          authorizer.setUserForPreVersion(true);
         case UpdateUser:
-          try {
-            authorizer.updateUserPassword(userName, newPassword);
-          } finally {
-            authorizer.setUserForPreVersion(false);
-          }
+          authorizer.updateUserPassword(userName, newPassword);
           break;
         case CreateUserDep:
           AuthUtils.validatePasswordPre(password);
@@ -235,37 +232,29 @@ public class AuthorInfo implements SnapshotProcessor {
           authorizer.deleteRole(roleName);
           break;
         case GrantRoleDep:
-          authorizer.setRoleForPreVersion(true);
+          grantPrivilegeForPreVersion(false, roleName, permissions, nodeNameList);
         case GrantRole:
-          try {
-            for (int permission : permissions) {
-              if (!isPathRelevant(permission)) {
-                authorizer.grantPrivilegeToRole(roleName, null, permission, grantOpt);
-                continue;
-              }
-              for (PartialPath path : nodeNameList) {
-                authorizer.grantPrivilegeToRole(roleName, path, permission, grantOpt);
-              }
+          for (int permission : permissions) {
+            if (!isPathRelevant(permission)) {
+              authorizer.grantPrivilegeToRole(roleName, null, permission, grantOpt);
+              continue;
             }
-          } finally {
-            authorizer.setRoleForPreVersion(false);
+            for (PartialPath path : nodeNameList) {
+              authorizer.grantPrivilegeToRole(roleName, path, permission, grantOpt);
+            }
           }
           break;
         case GrantUserDep:
-          authorizer.setUserForPreVersion(true);
+          grantPrivilegeForPreVersion(true, userName, permissions, nodeNameList);
         case GrantUser:
-          try {
-            for (int permission : permissions) {
-              if (!isPathRelevant(permission)) {
-                authorizer.grantPrivilegeToUser(userName, null, permission, grantOpt);
-                continue;
-              }
-              for (PartialPath path : nodeNameList) {
-                authorizer.grantPrivilegeToUser(userName, path, permission, grantOpt);
-              }
+          for (int permission : permissions) {
+            if (!isPathRelevant(permission)) {
+              authorizer.grantPrivilegeToUser(userName, null, permission, grantOpt);
+              continue;
             }
-          } finally {
-            authorizer.setUserForPreVersion(false);
+            for (PartialPath path : nodeNameList) {
+              authorizer.grantPrivilegeToUser(userName, path, permission, grantOpt);
+            }
           }
           break;
         case GrantRoleToUserDep:
@@ -273,40 +262,32 @@ public class AuthorInfo implements SnapshotProcessor {
           authorizer.grantRoleToUser(roleName, userName);
           break;
         case RevokeUserDep:
-          authorizer.setUserForPreVersion(true);
+          revokePrivilegeForPreVersion(true, userName, permissions, nodeNameList);
+          break;
         case RevokeUser:
-          try {
-            for (int permission : permissions) {
-              if (!isPathRelevant(permission)) {
-                authorizer.revokePrivilegeFromUser(userName, null, permission);
-                continue;
-              }
-              for (PartialPath path : nodeNameList) {
-                authorizer.revokePrivilegeFromUser(userName, path, permission);
-              }
+          for (int permission : permissions) {
+            if (!isPathRelevant(permission)) {
+              authorizer.revokePrivilegeFromUser(userName, null, permission);
+              continue;
             }
-          } finally {
-            authorizer.setUserForPreVersion(false);
+            for (PartialPath path : nodeNameList) {
+              authorizer.revokePrivilegeFromUser(userName, path, permission);
+            }
           }
-
           break;
         case RevokeRoleDep:
-          authorizer.setRoleForPreVersion(false);
+          revokePrivilegeForPreVersion(false, roleName, permissions, nodeNameList);
+          break;
         case RevokeRole:
-          try {
-            for (int permission : permissions) {
-              if (!isPathRelevant(permission)) {
-                authorizer.revokePrivilegeFromRole(roleName, null, permission);
-                continue;
-              }
-              for (PartialPath path : nodeNameList) {
-                authorizer.revokePrivilegeFromRole(roleName, path, permission);
-              }
+          for (int permission : permissions) {
+            if (!isPathRelevant(permission)) {
+              authorizer.revokePrivilegeFromRole(roleName, null, permission);
+              continue;
             }
-          } finally {
-            authorizer.setRoleForPreVersion(false);
+            for (PartialPath path : nodeNameList) {
+              authorizer.revokePrivilegeFromRole(roleName, path, permission);
+            }
           }
-
           break;
         case RevokeRoleFromUserDep:
         case RevokeRoleFromUser:
@@ -628,5 +609,63 @@ public class AuthorInfo implements SnapshotProcessor {
 
   public void checkUserPathPrivilege() {
     authorizer.checkUserPathPrivilege();
+  }
+
+  private void grantPrivilegeForPreVersion(
+      boolean isUser, String name, Set<Integer> permissions, List<PartialPath> nodeNameList)
+      throws AuthException {
+    for (int permission : permissions) {
+      PriPrivilegeType type = PriPrivilegeType.values()[permission];
+      if (type.isAccept()) {
+        if (!type.isAccept()) {
+          if (isUser) {
+            if (!type.isPathRelevant()) {
+              authorizer.grantPrivilegeToUser(name, null, permission, false);
+              continue;
+            }
+            for (PartialPath path : nodeNameList) {
+              authorizer.grantPrivilegeToUser(name, path, permission, false);
+            }
+          } else {
+            if (!type.isPathRelevant()) {
+              authorizer.grantPrivilegeToRole(name, null, permission, false);
+              continue;
+            }
+            for (PartialPath path : nodeNameList) {
+              authorizer.grantPrivilegeToRole(name, path, permission, false);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private void revokePrivilegeForPreVersion(
+      boolean isUser, String name, Set<Integer> permissions, List<PartialPath> nodeNameList)
+      throws AuthException {
+    for (int permission : permissions) {
+      PriPrivilegeType type = PriPrivilegeType.values()[permission];
+      if (type.isAccept()) {
+        if (!type.isAccept()) {
+          if (isUser) {
+            if (!type.isPathRelevant()) {
+              authorizer.revokePrivilegeFromUser(name, null, permission);
+              continue;
+            }
+            for (PartialPath path : nodeNameList) {
+              authorizer.revokePrivilegeFromUser(name, path, permission);
+            }
+          } else {
+            if (!type.isPathRelevant()) {
+              authorizer.revokePrivilegeFromRole(name, null, permission);
+              continue;
+            }
+            for (PartialPath path : nodeNameList) {
+              authorizer.revokePrivilegeFromRole(name, path, permission);
+            }
+          }
+        }
+      }
+    }
   }
 }

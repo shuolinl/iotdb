@@ -18,10 +18,8 @@
  */
 package org.apache.iotdb.commons.utils;
 
-import org.apache.iotdb.commons.auth.AuthException;
 import org.apache.iotdb.commons.auth.entity.PathPrivilege;
 import org.apache.iotdb.commons.auth.entity.PriPrivilegeType;
-import org.apache.iotdb.commons.auth.entity.PrivilegeType;
 import org.apache.iotdb.commons.auth.entity.Role;
 import org.apache.iotdb.commons.exception.IllegalPathException;
 import org.apache.iotdb.commons.path.PartialPath;
@@ -207,26 +205,17 @@ public class IOUtils {
     for (int i = 0; i < pathPriNum; i++) {
       String path = IOUtils.readString(inputStream, encoding, strBufferLocal);
       PartialPath ppath = new PartialPath(path);
-      if (role.getServiceReady()) {
-        try {
-          AuthUtils.validatePatternPath(ppath);
-        } catch (AuthException e) {
-          role.setServiceReady(false);
-        }
-      }
       PathPrivilege pathPriv = new PathPrivilege(ppath);
       int priNum = inputStream.readInt();
       boolean isPathRelevant = false;
       for (int j = 0; j < priNum; j++) {
         PriPrivilegeType priType = PriPrivilegeType.values()[inputStream.readInt()];
         if (priType.isAccept()) {
-          for (PrivilegeType item : priType.getSubPri()) {
-            if (item.isPathRelevant()) {
-              pathPriv.grantPrivilege(item.ordinal(), false);
-              isPathRelevant = true;
-            } else {
-              role.getSysPrivilege().add(item.ordinal());
-            }
+          if (priType.isPathRelevant()) {
+            pathPriv.grantPrivilege(priType.ordinal(), false);
+            isPathRelevant = true;
+          } else {
+            role.getSysPrivilege().add(priType.ordinal());
           }
         }
       }
@@ -235,6 +224,7 @@ public class IOUtils {
       }
     }
     role.setPrivilegeList(pathPrivilegeList);
+    role.setServiceReady(false);
   }
 
   /**

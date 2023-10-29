@@ -20,6 +20,7 @@ package org.apache.iotdb.commons.auth.user;
 
 import org.apache.iotdb.commons.auth.AuthException;
 import org.apache.iotdb.commons.auth.entity.PathPrivilege;
+import org.apache.iotdb.commons.auth.entity.PriPrivilegeType;
 import org.apache.iotdb.commons.auth.entity.PrivilegeType;
 import org.apache.iotdb.commons.auth.entity.User;
 import org.apache.iotdb.commons.concurrent.HashLock;
@@ -37,6 +38,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -50,6 +52,7 @@ public abstract class BasicUserManager implements IUserManager {
   protected Map<String, User> userMap;
   protected IUserAccessor accessor;
   protected HashLock lock;
+  private boolean preVersionToHandle = false;
 
   /**
    * This filed only for pre version. When we do a major version upgrade, it can be removed
@@ -315,6 +318,11 @@ public abstract class BasicUserManager implements IUserManager {
     for (String name : accessor.listAllUsers()) {
       try {
         userMap.put(name, accessor.loadUser(name));
+        if (!preVersionToHandle) {
+          if (!userMap.get(name).getServiceReady()) {
+            preVersionToHandle = true;
+          }
+        }
       } catch (IOException e) {
         throw new AuthException(TSStatusCode.AUTH_IO_EXCEPTION, e);
       }
@@ -373,28 +381,48 @@ public abstract class BasicUserManager implements IUserManager {
 
   @Override
   public void checkAndRefreshPathPri() {
+    if (!preVersionToHandle) {
+      return;
+    }
     userMap.forEach(
         (rolename, user) -> {
           if (!user.getServiceReady()) {
             List<PathPrivilege> priCopy = new ArrayList<>();
+            HashSet<Integer> sysCopy = new HashSet<>();
             for (PathPrivilege pathPri : user.getPathPrivilegeList()) {
-              try {
-                AuthUtils.validatePatternPath(pathPri.getPath());
-                priCopy.add(pathPri);
-              } catch (AuthException e) {
+              for (int permission : pathPri.getPrivileges()) {
+                PriPrivilegeType type = PriPrivilegeType.values()[permission];
                 PartialPath path = pathPri.getPath();
                 try {
-                  for (Integer pri : pathPri.getPrivileges()) {
-                    AuthUtils.addPrivilege(AuthUtils.convertPatternPath(path), pri, priCopy, false);
+                  AuthUtils.validatePatternPath(path);
+                } catch (AuthException e) {
+                  try {
+                    path = AuthUtils.convertPatternPath(path);
+                  } catch (IllegalPathException illegalE) {
+                    String[] str = {"root", "**"};
+                    path = new PartialPath(str);
                   }
-                } catch (IllegalPathException illegalE) {
-                  //
+                }
+
+                for (PrivilegeType item : type.getSubPri()) {
+                  if (item.isPathRelevant()) {
+                    AuthUtils.addPrivilege(path, item.ordinal(), priCopy, false);
+                  } else {
+                    sysCopy.add(item.ordinal());
+                  }
                 }
               }
             }
+            for (int sysPri : user.getSysPrivilege()) {
+              PriPrivilegeType type = PriPrivilegeType.values()[sysPri];
+              for (PrivilegeType item : type.getSubPri()) {
+                sysCopy.add(item.ordinal());
+              }
+            }
             user.setPrivilegeList(priCopy);
+            user.setSysPrivilegeSet(sysCopy);
+            user.setServiceReady(true);
           }
-          user.setServiceReady(true);
         });
   }
 }
