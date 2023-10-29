@@ -27,6 +27,15 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+// This file contains the relationship of privilege between old and new version.
+// To handle online upgrade from old version to new version. We need to handle information:
+// 1. Pre privilege store in user.profile
+// 2. Pre Privilege store in raftlog.
+// Upgrade action has these stage:
+// 1. load old version's profile from snapshot
+// 2. redo raft log.
+// 3. do new version's raftlog.
+
 public enum PriPrivilegeType {
   CREATE_DATABASE(true, false, PrivilegeType.MANAGE_DATABASE),
   INSERT_TIMESERIES(true, true, PrivilegeType.WRITE_DATA),
