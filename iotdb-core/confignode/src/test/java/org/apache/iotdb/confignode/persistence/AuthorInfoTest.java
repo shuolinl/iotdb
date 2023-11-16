@@ -953,7 +953,7 @@ public class AuthorInfoTest {
             0, BasicAuthorizer.getInstance().getRole("role1").getSysPrivilege().size());
         Assert.assertFalse(BasicAuthorizer.getInstance().forRolePreVersion());
       } else {
-        if (item.isPreIsPathRelevant()) {
+        if (item.isPrePathRelevant()) {
           authorPlan =
               new AuthorPlan(
                   ConfigPhysicalPlanType.GrantUserDep,
@@ -966,7 +966,7 @@ public class AuthorInfoTest {
                   Collections.singletonList(new PartialPath("root.t1.*.t2")));
           status = authorInfo.authorNonQuery(authorPlan);
           Assert.assertEquals(TSStatusCode.SUCCESS_STATUS.getStatusCode(), status.getCode());
-          if (item.isPathRelevant()) {
+          if (item.isPrePathRelevant()) {
             Assert.assertEquals(
                 1,
                 BasicAuthorizer.getInstance()
@@ -1001,7 +1001,7 @@ public class AuthorInfoTest {
                   Collections.singletonList(new PartialPath("root.t1.**")));
           status = authorInfo.authorNonQuery(authorPlan);
           Assert.assertEquals(TSStatusCode.SUCCESS_STATUS.getStatusCode(), status.getCode());
-          if (item.isPathRelevant()) {
+          if (item.isPrePathRelevant()) {
             Assert.assertEquals(
                 0,
                 BasicAuthorizer.getInstance()

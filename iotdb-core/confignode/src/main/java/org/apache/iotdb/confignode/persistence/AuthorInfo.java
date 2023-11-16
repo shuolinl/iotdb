@@ -193,14 +193,17 @@ public class AuthorInfo implements SnapshotProcessor {
     // permissions have
     // been processed before. The encoding and meaning of these old permissions have changed
     // significantly.
-    if (authorType.ordinal() >= ConfigPhysicalPlanType.GrantRoleDep.ordinal()
-        && authorType.ordinal() <= ConfigPhysicalPlanType.RevokeRoleFromUserDep.ordinal()) {
+    if (authorType.ordinal() >= ConfigPhysicalPlanType.CreateUserDep.ordinal()
+        && authorType.ordinal() <= ConfigPhysicalPlanType.UpdateUser.ordinal()) {
       // if meet old version's permissions, we will set pre version tag.
       authorizer.setUserForPreVersion(true);
       authorizer.setRoleForPreVersion(true);
       hasPrePriv = true;
     } else {
       if (hasPrePriv) {
+        // when we refresh our preversion's information？
+        // 1. before raftlog redoing finish.（ALL author plans in raftlog are pre version)
+        // 2. refresh during raftlog. (pre version mixed with new version)
         authorizer.checkUserPathPrivilege();
         hasPrePriv = false;
       }
@@ -622,18 +625,10 @@ public class AuthorInfo implements SnapshotProcessor {
       PriPrivilegeType type = PriPrivilegeType.values()[permission];
       if (type.isAccept()) {
         if (isUser) {
-          if (!type.isPathRelevant()) {
-            authorizer.grantPrivilegeToUser(name, null, permission, false);
-            continue;
-          }
           for (PartialPath path : nodeNameList) {
             authorizer.grantPrivilegeToUser(name, path, permission, false);
           }
         } else {
-          if (!type.isPathRelevant()) {
-            authorizer.grantPrivilegeToRole(name, null, permission, false);
-            continue;
-          }
           for (PartialPath path : nodeNameList) {
             authorizer.grantPrivilegeToRole(name, path, permission, false);
           }
@@ -650,18 +645,10 @@ public class AuthorInfo implements SnapshotProcessor {
       if (type.isAccept()) {
         if (!type.isAccept()) {
           if (isUser) {
-            if (!type.isPathRelevant()) {
-              authorizer.revokePrivilegeFromUser(name, null, permission);
-              continue;
-            }
             for (PartialPath path : nodeNameList) {
               authorizer.revokePrivilegeFromUser(name, path, permission);
             }
           } else {
-            if (!type.isPathRelevant()) {
-              authorizer.revokePrivilegeFromRole(name, null, permission);
-              continue;
-            }
             for (PartialPath path : nodeNameList) {
               authorizer.revokePrivilegeFromRole(name, path, permission);
             }
