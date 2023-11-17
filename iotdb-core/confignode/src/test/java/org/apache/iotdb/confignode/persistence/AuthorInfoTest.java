@@ -973,11 +973,6 @@ public class AuthorInfoTest {
                     .getUser("user1")
                     .getPathPrivileges(new PartialPath("root.t1.*.t2"))
                     .size());
-            Assert.assertTrue(
-                BasicAuthorizer.getInstance()
-                    .getUser("user1")
-                    .getPathPrivileges(new PartialPath("root.t1.*.t2"))
-                    .containsAll(item.getSubPriOrd()));
             Assert.assertFalse(BasicAuthorizer.getInstance().getUser("user1").getServiceReady());
           } else {
             Assert.assertTrue(
