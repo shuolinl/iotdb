@@ -2219,12 +2219,18 @@ public class DataRegion implements IDataRegionForQuery {
       long endTime) {
 
     for (TsFileResource file : tsFileResourceList) {
-      // If the time range of the file is not a subinterval of the time range
-      // to be deleted, then it needs to be deleted through mods.
+      // DeleteByFileds only contian :
+      // 1. file be closed
+      // 2. file is not compacting
       long fileStartTime = file.getTimeIndex().getMinStartTime();
       long fileEndTime = file.getTimeIndex().getMaxEndTime();
+
       if (startTime == Long.MIN_VALUE && endTime == Long.MAX_VALUE) {
-        deletedByFiles.add(file);
+        if (file.isClosed() && file.setStatus(TsFileResourceStatus.DELETED)) {
+          deletedByFiles.add(file);
+        } else {
+         deletedByMods.add(file);
+        }
         continue;
       }
       if (!file.isClosed() && fileEndTime == Long.MIN_VALUE) {
