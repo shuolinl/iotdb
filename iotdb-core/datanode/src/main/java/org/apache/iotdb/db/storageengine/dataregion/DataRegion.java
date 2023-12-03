@@ -1925,7 +1925,7 @@ public class DataRegion implements IDataRegionForQuery {
 
       // write log to impacted working TsFileProcessors
       List<WALFlushListener> walListeners =
-          logDeletionInWAL(startTime, endTime, searchIndex, new PartialPath(databaseName));
+          logDeletionInWAL(startTime, endTime, searchIndex, pathToDelete);
 
       for (WALFlushListener walFlushListener : walListeners) {
         if (walFlushListener.waitForResult() == WALFlushListener.Status.FAILURE) {
@@ -2120,7 +2120,13 @@ public class DataRegion implements IDataRegionForQuery {
       throws IOException {
     List<TsFileResource> deletedByMods = new ArrayList<>();
     List<TsFileResource> deletedByFiles = new ArrayList<>();
-    separateTsFileToDelete(tsfileResourceList, deletedByMods, deletedByFiles, startTime, endTime);
+    separateTsFileToDelete(
+        new HashSet<>(pathToDelete.getDevicePathPattern()),
+        tsfileResourceList,
+        deletedByMods,
+        deletedByFiles,
+        startTime,
+        endTime);
     Deletion deletion = new Deletion(pathToDelete, MERGE_MOD_START_VERSION_NUM, startTime, endTime);
     // can be deleted by mods.
     for (TsFileResource tsFileResource : deletedByMods) {
@@ -2186,24 +2192,16 @@ public class DataRegion implements IDataRegionForQuery {
 
     // can be deleted by files
     for (TsFileResource tsFileResource : deletedByFiles) {
-      if (!tsFileResource.isClosed()) {
-        tsFileResource
-            .getProcessor()
-            .deleteDataInMemory(deletion, new HashSet<>(pathToDelete.getDevicePathPattern()));
-        tsFileResource.close();
-      }
-
-      tsFileResource.setStatus(TsFileResourceStatus.DELETED);
       tsFileManager.remove(tsFileResource, tsFileResource.isSeq());
       tsFileResource.writeLock();
       try {
-        tsFileResource.remove();
         FileMetrics.getInstance()
             .deleteTsFile(tsFileResource.isSeq(), Collections.singletonList(tsFileResource));
         if (tsFileResource.getModFile().exists()) {
           FileMetrics.getInstance().decreaseModFileNum(1);
           FileMetrics.getInstance().decreaseModFileSize(tsFileResource.getModFile().getSize());
         }
+        tsFileResource.remove();
         logger.info("Remove tsfile {} directly when delete data", tsFileResource.getTsFilePath());
       } finally {
         tsFileResource.writeUnlock();
@@ -2212,41 +2210,24 @@ public class DataRegion implements IDataRegionForQuery {
   }
 
   private void separateTsFileToDelete(
+      Set<PartialPath> pathToDelete,
       List<TsFileResource> tsFileResourceList,
       List<TsFileResource> deletedByMods,
       List<TsFileResource> deletedByFiles,
       long startTime,
       long endTime) {
-
+    Set<String> deviceMatchInfo = new HashSet<>();
     for (TsFileResource file : tsFileResourceList) {
-      // DeleteByFileds only contian :
-      // 1. file be closed
-      // 2. file is not compacting
       long fileStartTime = file.getTimeIndex().getMinStartTime();
       long fileEndTime = file.getTimeIndex().getMaxEndTime();
 
-      if (startTime == Long.MIN_VALUE && endTime == Long.MAX_VALUE) {
-        if (file.isClosed() && file.setStatus(TsFileResourceStatus.DELETED)) {
+      if (!canSkipDelete(file, pathToDelete, startTime, endTime, deviceMatchInfo)) {
+        if (startTime <= fileStartTime
+            && endTime >= fileEndTime
+            && file.isClosed()
+            && file.setStatus(TsFileResourceStatus.DELETED)) {
           deletedByFiles.add(file);
         } else {
-         deletedByMods.add(file);
-        }
-        continue;
-      }
-      if (!file.isClosed() && fileEndTime == Long.MIN_VALUE) {
-        // unsealed seq file.
-        if (endTime < fileStartTime) {
-          continue;
-        } else if (startTime <= fileStartTime && endTime == Long.MAX_VALUE) {
-          deletedByFiles.add(file);
-        } else if (endTime >= fileStartTime) {
-          deletedByMods.add(file);
-        }
-      } else {
-        // sealed file or unsealed unseq file.
-        if (endTime >= fileEndTime && startTime <= fileStartTime) {
-          deletedByFiles.add(file);
-        } else if (endTime >= fileStartTime && startTime <= fileEndTime) {
           deletedByMods.add(file);
         }
       }
