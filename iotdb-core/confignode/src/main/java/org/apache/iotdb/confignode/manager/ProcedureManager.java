@@ -199,6 +199,7 @@ public class ProcedureManager {
         }
         deleteTimeSeriesProcedure = ((DeleteTimeSeriesProcedure) procedure);
         if (queryId.equals(deleteTimeSeriesProcedure.getQueryId())) {
+          // LSL, 初始化之后，这里应该不是 -1 了吧
           procedureId = deleteTimeSeriesProcedure.getProcId();
           break;
         }
@@ -208,6 +209,7 @@ public class ProcedureManager {
         }
       }
 
+      // 如果发现了相同的query， 静默直接返回
       if (procedureId == -1) {
         if (hasOverlappedTask) {
           return RpcUtils.getStatus(

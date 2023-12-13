@@ -88,6 +88,12 @@ public class DeleteTimeSeriesProcedure
     long startTime = System.currentTimeMillis();
     try {
       switch (state) {
+        // LSL
+        // 这里有四个状态：
+        // 1. 构建 black_list
+        // 2. 清理datanode 上的schema 缓存
+        // 3. 删除数据。// 需要检查一下这里是否有删除错误，但是返回正常的问题，异常是否被错误的catch了？
+        // 4. 删除元数据。
         case CONSTRUCT_BLACK_LIST:
           LOGGER.info("Construct schemaEngine black list of timeSeries {}", requestMessage);
           if (constructBlackList(env) > 0) {
@@ -128,6 +134,10 @@ public class DeleteTimeSeriesProcedure
 
   // return the total num of timeSeries in schemaEngine black list
   private long constructBlackList(ConfigNodeProcedureEnv env) {
+
+
+    // LSL 这里会不会有并发问题，导致获得的schema region 是错误的？
+    // 如果这个时候leader 切换，是不是可能拿到一个错误的列表？
     Map<TConsensusGroupId, TRegionReplicaSet> targetSchemaRegionGroup =
         env.getConfigManager().getRelatedSchemaRegionGroup(patternTree);
     if (targetSchemaRegionGroup.isEmpty()) {
