@@ -126,7 +126,6 @@ public class IoTConsensusServerImpl {
       IoTConsensusConfig config) {
     this.active = true;
     this.storageDir = storageDir;
-    this.storageDir = storageDir;
     this.thisNode = thisNode;
     this.stateMachine = stateMachine;
     this.cacheQueueMap = new ConcurrentHashMap<>();

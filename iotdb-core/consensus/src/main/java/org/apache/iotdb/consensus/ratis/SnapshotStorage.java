@@ -63,6 +63,7 @@ public class SnapshotStorage implements StateMachineStorage {
 
   @Override
   public void init(RaftStorage raftStorage) throws IOException {
+    // getSnapshotDir() 是 datanode 用来保存数据的
     this.stateMachineDir =
         Optional.ofNullable(getSnapshotDir())
             .orElse(raftStorage.getStorageDir().getStateMachineDir());

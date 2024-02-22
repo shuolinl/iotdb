@@ -1,14 +1,15 @@
-//package org.apache.iotdb.commons.snapshot;
+// package org.apache.iotdb.commons.snapshot;
 //
-//import java.nio.file.Path;
-//import java.util.List;
+// import java.nio.file.Path;
+// import java.util.List;
 //
-///**
-// * This is the interface of snapshot parser. This interface can be implemented at config and datanode
+/// **
+// * This is the interface of snapshot parser. This interface can be implemented at config and
+// datanode
 // * to handle their snapshot files.
 // */
 //
-//public interface SnapshotParser<E> {
+// public interface SnapshotParser<E> {
 //
 //    /**
 //     * Get snapshot
@@ -30,4 +31,4 @@
 //     * @return Iterable statements or plans.
 //     */
 //    public Iterable<E> parserSnapshotFile(Path snapshotFilePath);
-//}
+// }

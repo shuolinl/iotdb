@@ -20,8 +20,10 @@ package org.apache.iotdb.db.auth.user;
 
 import org.apache.iotdb.commons.auth.entity.PathPrivilege;
 import org.apache.iotdb.commons.auth.entity.PriPrivilegeType;
+import org.apache.iotdb.commons.auth.entity.PrivilegeType;
 import org.apache.iotdb.commons.auth.entity.User;
 import org.apache.iotdb.commons.auth.user.LocalFileUserAccessor;
+import org.apache.iotdb.commons.conf.IoTDBConstant;
 import org.apache.iotdb.commons.exception.IllegalPathException;
 import org.apache.iotdb.commons.path.PartialPath;
 import org.apache.iotdb.db.utils.EnvironmentUtils;
@@ -160,5 +162,30 @@ public class LocalFileUserAccessorTest {
         assertEquals(33, path.getPrivileges().size());
       }
     }
+  }
+
+  @Test
+  public void testLoadBadFile() throws IOException, IllegalPathException {
+    User role = new User();
+    role.setName("root1");
+    role.setPrivilegeList(new ArrayList<>());
+    role.setSysPriGrantOpt(new HashSet<>());
+    role.setSysPrivilegeSet(new HashSet<>());
+    role.setRoleList(new ArrayList<>());
+    accessor.saveUser(role);
+    User admin = accessor.loadUser("root231");
+    PartialPath rootPath = new PartialPath(IoTDBConstant.PATH_ROOT + ".**");
+    PathPrivilege pathPri = new PathPrivilege(rootPath);
+    for (PrivilegeType item : PrivilegeType.values()) {
+      if (!item.isPathRelevant()) {
+        admin.getSysPrivilege().add(item.ordinal());
+        admin.getSysPriGrantOpt().add(item.ordinal());
+      } else {
+        pathPri.grantPrivilege(item.ordinal(), true);
+      }
+    }
+    admin.getPathPrivilegeList().add(pathPri);
+    accessor.saveUser(admin);
+    String name = admin.getName();
   }
 }
