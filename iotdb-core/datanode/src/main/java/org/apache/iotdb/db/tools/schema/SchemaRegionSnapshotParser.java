@@ -1,14 +1,13 @@
  package org.apache.iotdb.db.tools.schema;
 
-
- import com.sun.jdi.ArrayReference;
  import org.apache.iotdb.commons.path.PartialPath;
  import org.apache.iotdb.commons.schema.SchemaConstant;
+ import org.apache.iotdb.commons.schema.node.IMNode;
+ import org.apache.iotdb.commons.schema.node.visitor.MNodeVisitor;
  import org.apache.iotdb.commons.schema.view.LogicalViewSchema;
- import org.apache.iotdb.consensus.config.RatisConfig;
- import org.apache.iotdb.db.queryengine.plan.parser.StatementGenerator;
  import org.apache.iotdb.db.queryengine.plan.statement.AuthorType;
  import org.apache.iotdb.db.queryengine.plan.statement.Statement;
+ import org.apache.iotdb.db.queryengine.plan.statement.metadata.template.ActivateTemplateStatement;
  import org.apache.iotdb.db.queryengine.plan.statement.sys.AuthorStatement;
  import org.apache.iotdb.db.schemaengine.schemaregion.mtree.impl.mem.mnode.IMemMNode;
  import org.apache.iotdb.db.schemaengine.schemaregion.mtree.impl.mem.mnode.impl.BasicInternalMNode;
@@ -53,7 +52,6 @@
         // 这里只假设我们获取了 MemTree 文件，暂时先不考虑 Tag 文件，Tag 文件的解析工作后面再加入。
         try (BufferedInputStream inputStream = new BufferedInputStream(new FileInputStream(snapshotFile))) {
             byte version = ReadWriteIOUtils.readByte(inputStream);
-            // 这里需要解析为statement
             StatementGener gen = new StatementGener(inputStream);
             return new Iterable<Statement>() {
                 @Override
@@ -70,26 +68,75 @@
 
     }
 
+     private static class StatementGener implements Iterator<Statement> {
+         private IMemMNode curNode;
 
-    private static IMemMNode deserializeMemTree(InputStream inputStream) throws IOException{
-        Deque<IMemMNode> ancestors = new ArrayDeque<>();
-        Deque<Integer> restChildrenNum = new ArrayDeque<>();
-        deserializeMNode(ancestors, restChildrenNum,inputStream);
-        int childrenNum;
-        IMemMNode root = ancestors.peek();
-        while(!ancestors.isEmpty()) {
-            childrenNum = restChildrenNum.pop();
-            if (childrenNum == 0) {
-                ancestors.pop();
-            } else {
-                restChildrenNum.push(childrenNum - 1);
-                deserializeMNode(ancestors, restChildrenNum, inputStream);
-            }
-        }
-        return root;
-    }
+         private int childNum = 0;
 
-    private static void deserializeMNode(Deque<IMemMNode> ancestors, Deque<Integer> restChildrenNum,
+         private IMemMNode root;
+         private int index = 0;
+
+         private Exception lastExcep = null;
+
+         private InputStream inputStream;
+
+         // 帮助记录遍历进度
+         private Deque<IMemMNode> ancestors = new ArrayDeque<>();
+         private Deque<Integer> restChildrenNum = new ArrayDeque<>();
+
+         public StatementGener(InputStream inputStream) throws IOException {
+             this.inputStream = inputStream;
+             this.root = deserializeMNode(this.ancestors, this.restChildrenNum, this.inputStream);
+             this.curNode = this.root;
+             byte version = ReadWriteIOUtils.readByte(this.inputStream);
+         }
+
+         // hasNext 用来遍历到可供输出 statement 的节点，
+         // next 用来将对应的节点转换为对应的 statement
+         @Override
+         public boolean hasNext() {
+             while (!this.ancestors.isEmpty()) {
+                 this.childNum = restChildrenNum.pop();
+                 if (this.childNum == 0) {
+                     ancestors.pop();
+                 } else {
+                     restChildrenNum.push(childNum - 1);
+                      try {
+                          curNode = deserializeMNode(this.ancestors, this.restChildrenNum, this.inputStream);
+                      } catch (IOException ioe)  {
+                          this.lastExcep = ioe;
+                          return false;
+                      }
+                 }
+                 if (this.curNode != null) {
+                     return true;
+                 } else {
+                     return false;
+                 }
+             }
+             return false;
+         }
+
+         @Override
+         public Statement next() {
+             if (!hasNext()) {
+                 throw new NoSuchElementException();
+             }
+             index ++;
+             return new AuthorStatement(AuthorType.CREATE_ROLE);
+         }
+
+         private Statement translateMNode(IMemMNode node) {
+
+         }
+
+
+
+
+
+     }
+
+    private static IMemMNode deserializeMNode(Deque<IMemMNode> ancestors, Deque<Integer> restChildrenNum,
                                          InputStream inputStream) throws IOException {
         byte type = ReadWriteIOUtils.readByte(inputStream);
         IMemMNode node;
@@ -108,7 +155,6 @@
             case ENTITY_MNODE_TYPE:
             case STORAGE_GROUP_ENTITY_MNODE_TYPE:
                 childrenNum = ReadWriteIOUtils.readInt(inputStream);
-                node  = deserializeInternalMNode(inputStream);
                 int templateid = ReadWriteIOUtils.readInt(inputStream);
                 boolean useTemplate = ReadWriteIOUtils.readBool(inputStream);
                 boolean isAligned = ReadWriteIOUtils.readBoolObject(inputStream);
@@ -143,39 +189,21 @@
         }
     }
 
-    private static IMemMNode deserializeInternalMNode(InputStream inputStream) throws IOException {
-        String name = ReadWriteIOUtils.readString(inputStream);
-        IMemMNode node = new BasicInternalMNode(null, name);
-        ReadWriteIOUtils.readInt(inputStream);
-        ReadWriteIOUtils.readBool(inputStream);
-        return node;
-    }
-
-    private static class StatementGener implements Iterator<Statement> {
-        private IMemMNode curNode;
-
-        private IMemMNode root;
-        private int index = 0;
-
-        private InputStream inputStream;
-
-        public StatementGener(InputStream inputStream) {
-            this.inputStream = inputStream;
-            this.curNode = new BasicInternalMNode(null, "root");
-        }
+    private static class MNodeTranslater extends MNodeVisitor<Statement, PartialPath> {
 
         @Override
-        public boolean hasNext() {
-            return true;
-        }
-
-        @Override
-        public Statement next() {
-            if (!hasNext()) {
-                throw new NoSuchElementException();
+        public Statement visitBasicMNode(IMNode<?> node, PartialPath path) {
+            if (node.isDevice()) {
+                if (node.getAsDeviceMNode().isUseTemplate()) {
+                    return new ActivateTemplateStatement(path,)
+                }
             }
-            index ++;
-            return new AuthorStatement(AuthorType.CREATE_ROLE);
+
         }
     }
+
+
+
+
+
  }
