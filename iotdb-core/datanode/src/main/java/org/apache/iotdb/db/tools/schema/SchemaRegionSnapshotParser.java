@@ -3,10 +3,12 @@
  import org.apache.iotdb.commons.path.PartialPath;
  import org.apache.iotdb.commons.schema.SchemaConstant;
  import org.apache.iotdb.commons.schema.node.IMNode;
+ import org.apache.iotdb.commons.schema.node.utils.IMNodeContainer;
  import org.apache.iotdb.commons.schema.node.visitor.MNodeVisitor;
  import org.apache.iotdb.commons.schema.view.LogicalViewSchema;
  import org.apache.iotdb.db.queryengine.plan.statement.AuthorType;
  import org.apache.iotdb.db.queryengine.plan.statement.Statement;
+ import org.apache.iotdb.db.queryengine.plan.statement.metadata.CreateAlignedTimeSeriesStatement;
  import org.apache.iotdb.db.queryengine.plan.statement.metadata.template.ActivateTemplateStatement;
  import org.apache.iotdb.db.queryengine.plan.statement.sys.AuthorStatement;
  import org.apache.iotdb.db.schemaengine.schemaregion.mtree.impl.mem.mnode.IMemMNode;
@@ -92,13 +94,21 @@
          }
 
          // hasNext 用来遍历到可供输出 statement 的节点，
+         // 1. device node。用来创建timeseries， 但是创建时，需要获得measurement，因此device node 需要将它们的子节点遍历出来
          // next 用来将对应的节点转换为对应的 statement
          @Override
          public boolean hasNext() {
              while (!this.ancestors.isEmpty()) {
                  this.childNum = restChildrenNum.pop();
                  if (this.childNum == 0) {
+                     // 仅当所有的子节点都遍历出来之后，才允许返回【还需要有函数判断这个节点是不是需要进行转译的】
+                     // 此时，返回的便是可以进行statement 转化的节点了
+                     // 需要处理这几种节点：
+                     // 1. 中间节点，包含template的激活信息
+                     // 2. device 节点， 包含创建信息（是否为aligned序列，需要获取其所有的子节点才可以）
+                     // 3. measurement 节点，
                      ancestors.pop();
+                     return true;
                  } else {
                      restChildrenNum.push(childNum - 1);
                       try {
@@ -195,7 +205,26 @@
         public Statement visitBasicMNode(IMNode<?> node, PartialPath path) {
             if (node.isDevice()) {
                 if (node.getAsDeviceMNode().isUseTemplate()) {
-                    return new ActivateTemplateStatement(path,)
+                    // 这里会带来性能下降
+                    node.getAsDeviceMNode().setUseTemplate(false);
+                    return new ActivateTemplateStatement(path);
+                }
+                IMNodeContainer<BasicInternalMNode> measurements = (IMNodeContainer<BasicInternalMNode>) node.getChildren();
+                if (node.getAsDeviceMNode().isAligned()) {
+                    CreateAlignedTimeSeriesStatement stmt = new CreateAlignedTimeSeriesStatement();
+                    for (BasicInternalMNode measurement : measurements.values()) {
+                        stmt.addMeasurement(measurement.getName());
+                        stmt.addDataType(measurement.getAsMeasurementMNode().getDataType());
+                        stmt.addAliasList(measurement.getAlias());
+                        stmt.addEncoding(measurement.getAsMeasurementMNode().getSchema().getTimeTSEncoding());
+                        stmt.addCompressor(measurement.getAsMeasurementMNode().getSchema().getCompressor());
+                    }
+                    return stmt;
+                }
+                node.ge
+
+                } else {
+
                 }
             }
 

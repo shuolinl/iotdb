@@ -26,6 +26,7 @@ import org.apache.iotdb.commons.schema.node.common.AbstractDatabaseMNode;
 import org.apache.iotdb.commons.schema.node.common.AbstractMeasurementMNode;
 import org.apache.iotdb.commons.schema.node.role.IDeviceMNode;
 import org.apache.iotdb.commons.schema.node.role.IMeasurementMNode;
+import org.apache.iotdb.commons.schema.node.utils.IMNodeContainer;
 import org.apache.iotdb.commons.schema.node.utils.IMNodeFactory;
 import org.apache.iotdb.commons.schema.node.utils.IMNodeIterator;
 import org.apache.iotdb.commons.schema.node.visitor.MNodeVisitor;
