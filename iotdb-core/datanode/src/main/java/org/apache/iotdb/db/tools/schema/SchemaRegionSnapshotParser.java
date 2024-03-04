@@ -17,7 +17,6 @@ import org.apache.iotdb.db.schemaengine.schemaregion.mtree.impl.mem.mnode.impl.B
 import org.apache.iotdb.db.schemaengine.schemaregion.mtree.impl.mem.snapshot.MemMTreeSnapshotUtil.MNodeDeserializer;
 import org.apache.iotdb.db.schemaengine.schemaregion.mtree.loader.MNodeFactoryLoader;
 import org.apache.iotdb.tsfile.utils.ReadWriteIOUtils;
-import org.apache.iotdb.tsfile.write.schema.MeasurementSchema;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +35,7 @@ public class SchemaRegionSnapshotParser {
 
   private static final IMNodeFactory<IMemMNode> nodeFactory =
       MNodeFactoryLoader.getInstance().getMemMNodeIMNodeFactory();;
+
   public static List<Path> getSnapshotPaths() {
     return Collections.emptyList();
   }
@@ -44,7 +44,7 @@ public class SchemaRegionSnapshotParser {
     return Collections.emptyList();
   }
 
-  public static Iterable<Statement> translate2Statements(File snapshotFile) {
+  public static Iterable<Statement> translate2Statements(File snapshotFile) throws IOException {
     if (!snapshotFile.exists()) {
       return null;
     }
@@ -55,20 +55,14 @@ public class SchemaRegionSnapshotParser {
               "%s is not allowed, only support %s",
               snapshotFile.getName(), SchemaConstant.MTREE_SNAPSHOT));
     }
-
-    try (BufferedInputStream inputStream =
-        new BufferedInputStream(new FileInputStream(snapshotFile))) {
-      byte version = ReadWriteIOUtils.readByte(inputStream);
-      gener = new StatementGener(inputStream);
-      return () -> gener;
-    } catch (Exception e) {
-        LOGGER.error("meet err when parser schema region snapshot ", e);
-        return null;
-    }
+    gener = new StatementGener(snapshotFile);
+    return () -> gener;
   }
 
-  public static boolean parserFinshWithoutExp() {
-      return gener.lastExcep == null;
+  public static void parserFinshWithoutExp() throws IOException {
+    if (gener.lastExcep != null) {
+      throw new IOException();
+    }
   }
 
   private static class StatementGener implements Iterator<Statement> {
@@ -94,13 +88,14 @@ public class SchemaRegionSnapshotParser {
     private MNodeTranslater translater = new MNodeTranslater();
 
     private MNodeDeserializer deserializer = new MNodeDeserializer();
-    public StatementGener(InputStream inputStream) throws IOException {
 
-      this.inputStream = inputStream;
+    public StatementGener(File snapshotFile) throws IOException {
 
-      this.root = deserializeMNode(this.ancestors, this.restChildrenNum, deserializer, this.inputStream);
+      this.inputStream = new FileInputStream(snapshotFile);
+      Byte version = ReadWriteIOUtils.readByte(this.inputStream);
+      this.root =
+          deserializeMNode(this.ancestors, this.restChildrenNum, deserializer, this.inputStream);
       this.curNode = this.root;
-      byte version = ReadWriteIOUtils.readByte(this.inputStream);
     }
 
     @Override
@@ -120,13 +115,25 @@ public class SchemaRegionSnapshotParser {
         } else {
           restChildrenNum.push(childNum - 1);
           try {
-            curNode = deserializeMNode(this.ancestors, this.restChildrenNum, deserializer, inputStream);
+            curNode =
+                deserializeMNode(this.ancestors, this.restChildrenNum, deserializer, inputStream);
           } catch (IOException ioe) {
+            try {
+              this.inputStream.close();
+            } catch (IOException e) {
+              // same ioexception;
+            }
             this.lastExcep = ioe;
             return false;
           }
         }
       }
+      try {
+        this.inputStream.close();
+      } catch (IOException e) {
+        this.lastExcep = e;
+      }
+
       return false;
     }
 
@@ -168,8 +175,6 @@ public class SchemaRegionSnapshotParser {
         break;
       case MEASUREMENT_MNODE_TYPE:
         childrenNum = 0;
-        name = ReadWriteIOUtils.readString(inputStream);
-        MeasurementSchema schema = MeasurementSchema.deserializeFrom(inputStream);
         node = deserializer.deserializeMeasurementMNode(inputStream);
         break;
       case LOGICAL_VIEW_MNODE_TYPE:
