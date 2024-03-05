@@ -121,14 +121,6 @@ public class SchemaRegionSnapshotParser {
         this.childNum = restChildrenNum.pop();
         if (this.childNum == 0) {
           ancestors.pop();
-          Statement stmt = this.curNode.accept(translater, this.curNode.getPartialPath());
-          while (stmt != null) {
-            this.statements.push(stmt);
-            stmt = this.curNode.accept(translater, this.curNode.getPartialPath());
-          }
-          if (!this.statements.isEmpty()) {
-            return true;
-          }
         } else {
           restChildrenNum.push(childNum - 1);
           try {
@@ -142,6 +134,17 @@ public class SchemaRegionSnapshotParser {
             }
             this.lastExcep = ioe;
             return false;
+          }
+          Statement stmt =
+              this.curNode.accept(
+                  translater,
+                  new PartialPath(new String[] {"root"}).concatPath(this.curNode.getPartialPath()));
+          while (stmt != null) {
+            this.statements.push(stmt);
+            stmt = this.curNode.accept(translater, this.curNode.getPartialPath());
+          }
+          if (!this.statements.isEmpty()) {
+            return true;
           }
         }
       }
@@ -219,8 +222,8 @@ public class SchemaRegionSnapshotParser {
     @Override
     public Statement visitBasicMNode(IMNode<?> node, PartialPath path) {
       if (node.isDevice()) {
-        Statement stmt = genActivateTemplateStatement(node);
-        return stmt == null ? genAlignedTimeseriesStatement(node) : null;
+        Statement stmt = genActivateTemplateStatement(node, path);
+        return stmt == null ? genAlignedTimeseriesStatement(node, path) : null;
       }
       return null;
     }
@@ -229,8 +232,8 @@ public class SchemaRegionSnapshotParser {
     public Statement visitDatabaseMNode(
         AbstractDatabaseMNode<?, ? extends IMNode<?>> node, PartialPath path) {
       if (node.isDevice()) {
-        Statement stmt = genActivateTemplateStatement(node);
-        return stmt == null ? genAlignedTimeseriesStatement(node) : null;
+        Statement stmt = genActivateTemplateStatement(node, path);
+        return stmt == null ? genAlignedTimeseriesStatement(node, path) : null;
       }
       return null;
     }
@@ -242,24 +245,27 @@ public class SchemaRegionSnapshotParser {
         return null;
       } else {
         CreateTimeSeriesStatement stmt = new CreateTimeSeriesStatement();
-        stmt.setPath(node.getPartialPath());
+        stmt.setPath(path);
         stmt.setAlias(node.getAlias());
         stmt.setCompressor(node.getAsMeasurementMNode().getSchema().getCompressor());
         stmt.setDataType(node.getDataType());
         stmt.setEncoding(node.getAsMeasurementMNode().getSchema().getEncodingType());
+        // if measurement 's offset = -2, we should skip this node.
+        node.setOffset(-2);
         return stmt;
       }
     }
 
-    private Statement genActivateTemplateStatement(IMNode node) {
+    private Statement genActivateTemplateStatement(IMNode node, PartialPath path) {
       if (node.getAsDeviceMNode().isUseTemplate()) {
         node.getAsDeviceMNode().setUseTemplate(false);
-        return new ActivateTemplateStatement(node.getPartialPath());
+        return new ActivateTemplateStatement(path);
       }
       return null;
     }
 
-    private Statement genAlignedTimeseriesStatement(IMNode node) {
+    private Statement genAlignedTimeseriesStatement(IMNode node, PartialPath path) {
+      // 这里有问题。
       IMNodeContainer<BasicInternalMNode> measurements =
           (IMNodeContainer<BasicInternalMNode>) node.getAsMNode().getChildren();
       if (node.getAsDeviceMNode().isAligned()) {
