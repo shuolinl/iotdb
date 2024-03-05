@@ -13,7 +13,6 @@ import org.apache.iotdb.db.queryengine.plan.statement.metadata.CreateAlignedTime
 import org.apache.iotdb.db.queryengine.plan.statement.metadata.CreateTimeSeriesStatement;
 import org.apache.iotdb.db.queryengine.plan.statement.metadata.template.ActivateTemplateStatement;
 import org.apache.iotdb.db.schemaengine.schemaregion.mtree.impl.mem.mnode.IMemMNode;
-import org.apache.iotdb.db.schemaengine.schemaregion.mtree.impl.mem.mnode.impl.BasicInternalMNode;
 import org.apache.iotdb.db.schemaengine.schemaregion.mtree.impl.mem.snapshot.MemMTreeSnapshotUtil.MNodeDeserializer;
 import org.apache.iotdb.db.schemaengine.schemaregion.mtree.loader.MNodeFactoryLoader;
 import org.apache.iotdb.tsfile.utils.ReadWriteIOUtils;
@@ -120,7 +119,14 @@ public class SchemaRegionSnapshotParser {
       while (!this.ancestors.isEmpty()) {
         this.childNum = restChildrenNum.pop();
         if (this.childNum == 0) {
-          ancestors.pop();
+          IMemMNode node = this.ancestors.pop();
+          if (node.isDevice() && node.getAsDeviceMNode().isAligned()) {
+            Statement stmt =
+                translater.genAlignedTimeseriesStatement(
+                    node, new PartialPath(new String[] {"root"}).concatPath(node.getPartialPath()));
+            this.statements.add(stmt);
+            return true;
+          }
         } else {
           restChildrenNum.push(childNum - 1);
           try {
@@ -208,6 +214,10 @@ public class SchemaRegionSnapshotParser {
     if (!ancestors.isEmpty()) {
       node.setParent(ancestors.peek());
       ancestors.peek().addChild(node);
+      if (ancestors.peek().isDevice() && ancestors.peek().getAsDeviceMNode().isAligned()) {
+        // Aligned node's chlid will not be translated to statements
+        node.getAsMeasurementMNode().setOffset(-2);
+      }
     }
 
     if (childrenNum > 0 || isStorageGroupType(type)) {
@@ -222,8 +232,8 @@ public class SchemaRegionSnapshotParser {
     @Override
     public Statement visitBasicMNode(IMNode<?> node, PartialPath path) {
       if (node.isDevice()) {
-        Statement stmt = genActivateTemplateStatement(node, path);
-        return stmt == null ? genAlignedTimeseriesStatement(node, path) : null;
+        // Aligned timeserie will be created when node pop.
+        return genActivateTemplateStatement(node, path);
       }
       return null;
     }
@@ -265,20 +275,16 @@ public class SchemaRegionSnapshotParser {
     }
 
     private Statement genAlignedTimeseriesStatement(IMNode node, PartialPath path) {
-      // 这里有问题。
-      IMNodeContainer<BasicInternalMNode> measurements =
-          (IMNodeContainer<BasicInternalMNode>) node.getAsMNode().getChildren();
+      IMNodeContainer<IMemMNode> measurements = node.getAsInternalMNode().getChildren();
       if (node.getAsDeviceMNode().isAligned()) {
         CreateAlignedTimeSeriesStatement stmt = new CreateAlignedTimeSeriesStatement();
-        for (BasicInternalMNode measurement : measurements.values()) {
+        for (IMemMNode measurement : measurements.values()) {
           stmt.addMeasurement(measurement.getName());
           stmt.addDataType(measurement.getAsMeasurementMNode().getDataType());
           stmt.addAliasList(measurement.getAlias());
           stmt.addEncoding(measurement.getAsMeasurementMNode().getSchema().getTimeTSEncoding());
           stmt.addCompressor(measurement.getAsMeasurementMNode().getSchema().getCompressor());
-          measurement.setName(StatementGener.MAGICAL_STR);
         }
-        node.getChildren().clear();
         return stmt;
       }
       return null;

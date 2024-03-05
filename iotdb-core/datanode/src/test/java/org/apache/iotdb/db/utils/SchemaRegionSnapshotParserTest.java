@@ -10,10 +10,13 @@ import org.apache.iotdb.db.conf.IoTDBConfig;
 import org.apache.iotdb.db.conf.IoTDBDescriptor;
 import org.apache.iotdb.db.queryengine.plan.statement.Statement;
 import org.apache.iotdb.db.queryengine.plan.statement.metadata.CreateTimeSeriesStatement;
+import org.apache.iotdb.db.queryengine.plan.statement.metadata.template.ActivateTemplateStatement;
 import org.apache.iotdb.db.schemaengine.SchemaEngine;
 import org.apache.iotdb.db.schemaengine.schemaregion.ISchemaRegion;
+import org.apache.iotdb.db.schemaengine.schemaregion.write.req.IActivateTemplateInClusterPlan;
 import org.apache.iotdb.db.schemaengine.schemaregion.write.req.ICreateTimeSeriesPlan;
 import org.apache.iotdb.db.schemaengine.schemaregion.write.req.SchemaRegionWritePlanFactory;
+import org.apache.iotdb.db.schemaengine.template.Template;
 import org.apache.iotdb.db.tools.schema.SchemaRegionSnapshotParser;
 import org.apache.iotdb.tsfile.file.metadata.enums.CompressionType;
 import org.apache.iotdb.tsfile.file.metadata.enums.TSDataType;
@@ -29,10 +32,7 @@ import org.junit.runners.Parameterized;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
+import java.util.*;
 
 @RunWith(Parameterized.class)
 public class SchemaRegionSnapshotParserTest {
@@ -124,6 +124,9 @@ public class SchemaRegionSnapshotParserTest {
 
   @Test
   public void testSimpleTranslateSnapshot() throws Exception {
+    if (testParams.testModeName.equals("PBTree")) {
+      return;
+    }
     ISchemaRegion schemaRegion = getSchemaRegion("root.sg", 0);
     // Tree in memtree:
     // root->sg->s1->g1->temp
@@ -194,9 +197,7 @@ public class SchemaRegionSnapshotParserTest {
     File snapshotDir = new File(config.getSchemaDir() + File.separator + "snapshot");
     snapshotDir.mkdir();
     schemaRegion.createSnapshot(snapshotDir);
-    if (testParams.testModeName.equals("PBTree")) {
-      return;
-    }
+
     File snapshot =
         SystemFileFactory.INSTANCE.getFile(
             config.getSchemaDir()
@@ -206,7 +207,6 @@ public class SchemaRegionSnapshotParserTest {
                 + snapshotFileName);
     Iterable<Statement> statements = SchemaRegionSnapshotParser.translate2Statements(snapshot);
     int count = 0;
-    List<Statement> statementList = new ArrayList<>();
     SchemaRegionSnapshotParser.parserFinshWithoutExp();
     assert statements != null;
     for (Statement stmt : statements) {
@@ -226,5 +226,143 @@ public class SchemaRegionSnapshotParserTest {
     SchemaRegionSnapshotParser.parserFinshWithoutExp();
     Assert.assertEquals(5, count);
     System.out.println(count);
+  }
+
+  @Test
+  public void testAlignedTimeseriesTranslateSnapshot() throws Exception {
+    if (testParams.testModeName.equals("PBTree")) {
+      return;
+    }
+    ISchemaRegion schemaRegion = getSchemaRegion("root.sg", 0);
+    schemaRegion.createAlignedTimeSeries(
+        SchemaRegionWritePlanFactory.getCreateAlignedTimeSeriesPlan(
+            new PartialPath("root.sg.t1.t2"),
+            Arrays.asList("s1", "s2"),
+            Arrays.asList(TSDataType.INT32, TSDataType.INT64),
+            Arrays.asList(TSEncoding.PLAIN, TSEncoding.RLE),
+            Arrays.asList(CompressionType.SNAPPY, CompressionType.LZ4),
+            Arrays.asList("alias1", "alias2"),
+            Arrays.asList(
+                new HashMap<String, String>() {
+                  {
+                    put("tag1", "t1");
+                  }
+                },
+                new HashMap<String, String>() {
+                  {
+                    put("tag2", "t2");
+                  }
+                }),
+            Arrays.asList(
+                new HashMap<String, String>() {
+                  {
+                    put("attr1", "a1");
+                  }
+                },
+                new HashMap<String, String>() {
+                  {
+                    put("attr2", "a2");
+                  }
+                })));
+    File snapshotDir = new File(config.getSchemaDir() + File.separator + "snapshot");
+    snapshotDir.mkdir();
+    schemaRegion.createSnapshot(snapshotDir);
+    File snapshot =
+        SystemFileFactory.INSTANCE.getFile(
+            config.getSchemaDir()
+                + File.separator
+                + "snapshot"
+                + File.separator
+                + snapshotFileName);
+    Iterable<Statement> statements = SchemaRegionSnapshotParser.translate2Statements(snapshot);
+    int count = 0;
+    SchemaRegionSnapshotParser.parserFinshWithoutExp();
+    assert statements != null;
+    for (Statement stmt : statements) {
+      count++;
+    }
+    Assert.assertEquals(1, count);
+  }
+
+  @Test
+  public void testTemplateActivateTranslateSnapshot() throws Exception {
+    if (testParams.testModeName.equals("PBTree")) {
+      return;
+    }
+    ISchemaRegion schemaRegion = getSchemaRegion("root.sg", 0);
+    schemaRegion.createTimeseries(
+        SchemaRegionWritePlanFactory.getCreateTimeSeriesPlan(
+            new PartialPath("root.sg.s1.g1.temp"),
+            TSDataType.FLOAT,
+            TSEncoding.RLE,
+            CompressionType.SNAPPY,
+            null,
+            null,
+            null,
+            null),
+        0);
+    schemaRegion.createTimeseries(
+        SchemaRegionWritePlanFactory.getCreateTimeSeriesPlan(
+            new PartialPath("root.sg.s1.g3.temp"),
+            TSDataType.FLOAT,
+            TSEncoding.RLE,
+            CompressionType.SNAPPY,
+            null,
+            null,
+            null,
+            null),
+        0);
+    schemaRegion.createTimeseries(
+        SchemaRegionWritePlanFactory.getCreateTimeSeriesPlan(
+            new PartialPath("root.sg.s2.g1.temp"),
+            TSDataType.FLOAT,
+            TSEncoding.RLE,
+            CompressionType.SNAPPY,
+            null,
+            null,
+            null,
+            null),
+        0);
+    Template template =
+        new Template(
+            "t1",
+            Collections.singletonList("s1"),
+            Collections.singletonList(TSDataType.INT64),
+            Collections.singletonList(TSEncoding.PLAIN),
+            Collections.singletonList(CompressionType.GZIP));
+    template.setId(0);
+    HashMap<String, IActivateTemplateInClusterPlan> planMap = new HashMap<>();
+    IActivateTemplateInClusterPlan plan1 =
+        SchemaRegionWritePlanFactory.getActivateTemplateInClusterPlan(
+            new PartialPath("root.sg.s2"), 1, template.getId());
+    IActivateTemplateInClusterPlan plan2 =
+        SchemaRegionWritePlanFactory.getActivateTemplateInClusterPlan(
+            new PartialPath("root.sg.s3"), 1, template.getId());
+    planMap.put("root.sg.s2", plan1);
+    planMap.put("root.sg.s3", plan2);
+    schemaRegion.activateSchemaTemplate(plan1, template);
+    schemaRegion.activateSchemaTemplate(plan2, template);
+    File snapshotDir = new File(config.getSchemaDir() + File.separator + "snapshot");
+    snapshotDir.mkdir();
+    schemaRegion.createSnapshot(snapshotDir);
+    File snapshot =
+        SystemFileFactory.INSTANCE.getFile(
+            config.getSchemaDir()
+                + File.separator
+                + "snapshot"
+                + File.separator
+                + snapshotFileName);
+    Iterable<Statement> statements = SchemaRegionSnapshotParser.translate2Statements(snapshot);
+    int count = 0;
+    SchemaRegionSnapshotParser.parserFinshWithoutExp();
+    assert statements != null;
+    for (Statement stmt : statements) {
+      if (stmt instanceof ActivateTemplateStatement) {
+        ActivateTemplateStatement ATStatement = (ActivateTemplateStatement) stmt;
+        IActivateTemplateInClusterPlan plan = planMap.get(ATStatement.getPath().toString());
+        Assert.assertEquals(plan.getActivatePath());
+      }
+    }
+    Assert.assertEquals(2, count);
   }
 }
