@@ -21,11 +21,25 @@ import org.apache.iotdb.tsfile.utils.ReadWriteIOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.*;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayDeque;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.Iterator;
+import java.util.List;
+import java.util.NoSuchElementException;
 
-import static org.apache.iotdb.commons.schema.SchemaConstant.*;
+import static org.apache.iotdb.commons.schema.SchemaConstant.ENTITY_MNODE_TYPE;
+import static org.apache.iotdb.commons.schema.SchemaConstant.INTERNAL_MNODE_TYPE;
+import static org.apache.iotdb.commons.schema.SchemaConstant.LOGICAL_VIEW_MNODE_TYPE;
+import static org.apache.iotdb.commons.schema.SchemaConstant.MEASUREMENT_MNODE_TYPE;
+import static org.apache.iotdb.commons.schema.SchemaConstant.STORAGE_GROUP_ENTITY_MNODE_TYPE;
+import static org.apache.iotdb.commons.schema.SchemaConstant.STORAGE_GROUP_MNODE_TYPE;
+import static org.apache.iotdb.commons.schema.SchemaConstant.isStorageGroupType;
 
 public class SchemaRegionSnapshotParser {
 
@@ -100,6 +114,9 @@ public class SchemaRegionSnapshotParser {
 
     @Override
     public boolean hasNext() {
+      if (!this.statements.isEmpty()) {
+        return true;
+      }
       while (!this.ancestors.isEmpty()) {
         this.childNum = restChildrenNum.pop();
         if (this.childNum == 0) {
@@ -221,7 +238,7 @@ public class SchemaRegionSnapshotParser {
     @Override
     public Statement visitMeasurementMNode(
         AbstractMeasurementMNode<?, ? extends IMNode<?>> node, PartialPath path) {
-      if (node.isLogicalView()) {
+      if (node.isLogicalView() || node.getOffset() == -2) {
         return null;
       } else {
         CreateTimeSeriesStatement stmt = new CreateTimeSeriesStatement();
