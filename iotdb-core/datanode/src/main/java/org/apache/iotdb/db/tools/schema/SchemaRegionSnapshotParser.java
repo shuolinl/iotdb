@@ -1,5 +1,6 @@
 package org.apache.iotdb.db.tools.schema;
 
+import org.apache.iotdb.commons.file.SystemFileFactory;
 import org.apache.iotdb.commons.path.PartialPath;
 import org.apache.iotdb.commons.schema.SchemaConstant;
 import org.apache.iotdb.commons.schema.node.IMNode;
@@ -8,6 +9,8 @@ import org.apache.iotdb.commons.schema.node.common.AbstractMeasurementMNode;
 import org.apache.iotdb.commons.schema.node.utils.IMNodeContainer;
 import org.apache.iotdb.commons.schema.node.utils.IMNodeFactory;
 import org.apache.iotdb.commons.schema.node.visitor.MNodeVisitor;
+import org.apache.iotdb.db.conf.IoTDBConfig;
+import org.apache.iotdb.db.conf.IoTDBDescriptor;
 import org.apache.iotdb.db.queryengine.plan.statement.Statement;
 import org.apache.iotdb.db.queryengine.plan.statement.metadata.CreateAlignedTimeSeriesStatement;
 import org.apache.iotdb.db.queryengine.plan.statement.metadata.CreateTimeSeriesStatement;
@@ -24,8 +27,12 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.Iterator;
@@ -46,14 +53,59 @@ public class SchemaRegionSnapshotParser {
 
   private static StatementGener gener;
 
+  private static final String TMP_PREFIX = ".tmp.";
+
+  private static final IoTDBConfig config = IoTDBDescriptor.getInstance().getConfig();
+
   private static final IMNodeFactory<IMemMNode> nodeFactory =
       MNodeFactoryLoader.getInstance().getMemMNodeIMNodeFactory();;
 
   public static List<Path> getSnapshotPaths() {
-    return Collections.emptyList();
+    List<Path> snapshotList = new ArrayList<>();
+    String snapshotPath = config.getSchemaRegionConsensusDir();
+    File snapshotDir = new File(snapshotPath);
+    ArrayList<Path> schemaRegionList = new ArrayList<>();
+    try (DirectoryStream<Path> stream = Files.newDirectoryStream(snapshotDir.toPath())) {
+      for (Path path : stream) {
+        if (path.toFile().isDirectory()) {
+          schemaRegionList.add(path);
+        }
+      }
+    } catch (IOException exception) {
+      LOGGER.warn("cannot construct snapshot directory stream", exception);
+      return null;
+    }
+    if (schemaRegionList.isEmpty()) {
+      return null;
+    }
+    Path[] pathArray = snapshotPaths.toArray(new Path[0]);
+    Arrays.sort(
+        pathArray,
+        (o1, o2) -> {
+          String index1 = o1.toFile().getName().split("_")[1];
+          String index2 = o2.toFile().getName().split("_")[2];
+          return Long.compare(Long.parseLong(index1), Long.parseLong(index2));
+        });
+    Path latesSnapshot = pathArray[0];
+    File mtreeSnapshot =
+        SystemFileFactory.INSTANCE.getFile(
+            latesSnapshot.toString() + File.separator + SchemaConstant.MTREE_SNAPSHOT);
+    if (mtreeSnapshot.exists()) {
+      snapshotList.add(mtreeSnapshot.toPath());
+    }
+    File tagSnapshot =
+        SystemFileFactory.INSTANCE.getFile(
+            latesSnapshot.toString() + File.separator + SchemaConstant.TAG_LOG_SNAPSHOT);
+    if (tagSnapshot.exists()) {
+      snapshotList.add(tagSnapshot.toPath());
+    }
+    return snapshotList;
   }
 
   public static List<Path> getSnapshotPaths(String snapshotId) {
+    String snapshotPath = config.getSchemaRegionConsensusDir();
+    String magic_num = "47474747-4747-4747-4747-000000000000";
+    File snapshotDir = new File(snapshotPath + File.separator + magic_num + File.separator + "sm");
     return Collections.emptyList();
   }
 
