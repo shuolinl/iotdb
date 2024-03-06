@@ -27,13 +27,10 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.DirectoryStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.nio.file.*;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Deque;
 import java.util.Iterator;
 import java.util.List;
@@ -60,8 +57,7 @@ public class SchemaRegionSnapshotParser {
   private static final IMNodeFactory<IMemMNode> nodeFactory =
       MNodeFactoryLoader.getInstance().getMemMNodeIMNodeFactory();;
 
-  public static List<Path> getSnapshotPaths() {
-    List<Path> snapshotList = new ArrayList<>();
+  public static List<SchemaRegionSnapshotUnit> getSnapshotPaths() {
     String snapshotPath = config.getSchemaRegionConsensusDir();
     File snapshotDir = new File(snapshotPath);
     ArrayList<Path> schemaRegionList = new ArrayList<>();
@@ -78,35 +74,99 @@ public class SchemaRegionSnapshotParser {
     if (schemaRegionList.isEmpty()) {
       return null;
     }
-    Path[] pathArray = snapshotPaths.toArray(new Path[0]);
-    Arrays.sort(
-        pathArray,
-        (o1, o2) -> {
-          String index1 = o1.toFile().getName().split("_")[1];
-          String index2 = o2.toFile().getName().split("_")[2];
-          return Long.compare(Long.parseLong(index1), Long.parseLong(index2));
-        });
-    Path latesSnapshot = pathArray[0];
-    File mtreeSnapshot =
-        SystemFileFactory.INSTANCE.getFile(
-            latesSnapshot.toString() + File.separator + SchemaConstant.MTREE_SNAPSHOT);
-    if (mtreeSnapshot.exists()) {
-      snapshotList.add(mtreeSnapshot.toPath());
+
+    ArrayList<Path> latestSnapshots = new ArrayList<>();
+    for (Path regionPath : schemaRegionList) {
+      ArrayList<Path> snapshotList = new ArrayList<>();
+      try (DirectoryStream<Path> stream =
+          Files.newDirectoryStream(Paths.get(regionPath.toString() + File.separator + "sm"))) {
+        for (Path path : stream) {
+          if (path.toFile().isDirectory()) {
+            snapshotList.add(path);
+          }
+        }
+      } catch (IOException exception) {
+        LOGGER.warn("cannot construct snapshot for region path {}", regionPath);
+      }
+      Path[] pathArray = snapshotList.toArray(new Path[0]);
+      Arrays.sort(
+          pathArray,
+          (o1, o2) -> {
+            String index1 = o1.toFile().getName().split("_")[1];
+            String index2 = o2.toFile().getName().split("_")[2];
+            return Long.compare(Long.parseLong(index1), Long.parseLong(index2));
+          });
+      if (pathArray.length != 0) {
+        latestSnapshots.add(pathArray[0]);
+      }
     }
-    File tagSnapshot =
-        SystemFileFactory.INSTANCE.getFile(
-            latesSnapshot.toString() + File.separator + SchemaConstant.TAG_LOG_SNAPSHOT);
-    if (tagSnapshot.exists()) {
-      snapshotList.add(tagSnapshot.toPath());
+
+    if (latestSnapshots.isEmpty()) {
+      return null;
     }
-    return snapshotList;
+
+    ArrayList<SchemaRegionSnapshotUnit> snapshotUnits = new ArrayList<>();
+    for (Path path : latestSnapshots) {
+
+      File mtreeSnapshot =
+          SystemFileFactory.INSTANCE.getFile(
+              path.toString() + File.separator + SchemaConstant.MTREE_SNAPSHOT);
+      File tagSnapshot =
+          SystemFileFactory.INSTANCE.getFile(
+              path.toString() + File.separator + SchemaConstant.TAG_LOG_SNAPSHOT);
+      SchemaRegionSnapshotUnit unit =
+          new SchemaRegionSnapshotUnit(
+              mtreeSnapshot.exists() ? mtreeSnapshot.toPath() : null,
+              tagSnapshot.exists() ? tagSnapshot.toPath() : null);
+      if (unit.left != null) {
+        snapshotUnits.add(unit);
+      }
+    }
+    return snapshotUnits;
   }
 
-  public static List<Path> getSnapshotPaths(String snapshotId) {
+  public static List<SchemaRegionSnapshotUnit> getSnapshotPaths(String snapshotId) {
     String snapshotPath = config.getSchemaRegionConsensusDir();
-    String magic_num = "47474747-4747-4747-4747-000000000000";
-    File snapshotDir = new File(snapshotPath + File.separator + magic_num + File.separator + "sm");
-    return Collections.emptyList();
+    File snapshotDir = new File(snapshotPath);
+    ArrayList<Path> schemaRegionList = new ArrayList<>();
+    try (DirectoryStream<Path> stream = Files.newDirectoryStream(snapshotDir.toPath())) {
+      for (Path path : stream) {
+        if (path.toFile().isDirectory()) {
+          schemaRegionList.add(path);
+        }
+      }
+    } catch (IOException exception) {
+      LOGGER.warn("cannot construct snapshot directory stream", exception);
+      return null;
+    }
+    if (schemaRegionList.isEmpty()) {
+      return null;
+    }
+    ArrayList<Path> snapshotPathList = new ArrayList<>();
+    for (Path path : schemaRegionList) {
+      File targetPath =
+          SystemFileFactory.INSTANCE.getFile(path.toString() + "sm" + snapshotPathList);
+      if (targetPath.exists() && targetPath.isDirectory()) {
+        snapshotPathList.add(targetPath.toPath());
+      }
+    }
+    ArrayList<SchemaRegionSnapshotUnit> snapshotUnits = new ArrayList<>();
+    for (Path path : snapshotPathList) {
+      File mtreeSnapshot =
+          SystemFileFactory.INSTANCE.getFile(
+              path.toString() + File.separator + SchemaConstant.MTREE_SNAPSHOT);
+      File tagSnapshot =
+          SystemFileFactory.INSTANCE.getFile(
+              path.toString() + File.separator + SchemaConstant.TAG_LOG_SNAPSHOT);
+      SchemaRegionSnapshotUnit unit =
+          new SchemaRegionSnapshotUnit(
+              mtreeSnapshot.exists() ? mtreeSnapshot.toPath() : null,
+              tagSnapshot.exists() ? tagSnapshot.toPath() : null);
+      if (unit.left != null) {
+        snapshotUnits.add(unit);
+      }
+    }
+    return snapshotUnits;
   }
 
   public static Iterable<Statement> translate2Statements(File snapshotFile) throws IOException {
@@ -125,7 +185,7 @@ public class SchemaRegionSnapshotParser {
   }
 
   public static void parserFinshWithoutExp() throws IOException {
-    if (gener.lastExcep != null) {
+    if (gener.lastExcept != null) {
       throw new IOException();
     }
   }
@@ -133,16 +193,11 @@ public class SchemaRegionSnapshotParser {
   private static class StatementGener implements Iterator<Statement> {
     private IMemMNode curNode;
 
-    private int childNum = 0;
-
     private IMemMNode root;
 
-    private Exception lastExcep = null;
+    private Exception lastExcept = null;
 
-    private InputStream inputStream;
-
-    // 用这个来标记 Aligned timeseries 的 Chlid 都在这里处理完毕了。
-    private static final String MAGICAL_STR = "&^%$)";
+    private final InputStream inputStream;
 
     // 帮助记录遍历进度
     private Deque<IMemMNode> ancestors = new ArrayDeque<>();
@@ -150,9 +205,9 @@ public class SchemaRegionSnapshotParser {
 
     private Deque<Statement> statements = new ArrayDeque<>();
 
-    private MNodeTranslater translater = new MNodeTranslater();
+    private final MNodeTranslater translater = new MNodeTranslater();
 
-    private MNodeDeserializer deserializer = new MNodeDeserializer();
+    private final MNodeDeserializer deserializer = new MNodeDeserializer();
 
     public StatementGener(File snapshotFile) throws IOException {
 
@@ -169,8 +224,8 @@ public class SchemaRegionSnapshotParser {
         return true;
       }
       while (!this.ancestors.isEmpty()) {
-        this.childNum = restChildrenNum.pop();
-        if (this.childNum == 0) {
+        int childNum = restChildrenNum.pop();
+        if (childNum == 0) {
           IMemMNode node = this.ancestors.pop();
           if (node.isDevice() && node.getAsDeviceMNode().isAligned()) {
             Statement stmt =
@@ -190,7 +245,7 @@ public class SchemaRegionSnapshotParser {
             } catch (IOException e) {
               // same ioexception;
             }
-            this.lastExcep = ioe;
+            this.lastExcept = ioe;
             return false;
           }
           Statement stmt =
@@ -209,7 +264,7 @@ public class SchemaRegionSnapshotParser {
       try {
         this.inputStream.close();
       } catch (IOException e) {
-        this.lastExcep = e;
+        this.lastExcept = e;
       }
 
       return false;
