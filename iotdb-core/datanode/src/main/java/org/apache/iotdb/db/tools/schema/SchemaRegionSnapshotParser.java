@@ -1,5 +1,7 @@
 package org.apache.iotdb.db.tools.schema;
 
+import org.apache.iotdb.commons.conf.CommonConfig;
+import org.apache.iotdb.commons.conf.CommonDescriptor;
 import org.apache.iotdb.commons.file.SystemFileFactory;
 import org.apache.iotdb.commons.path.PartialPath;
 import org.apache.iotdb.commons.schema.SchemaConstant;
@@ -24,9 +26,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.*;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -34,7 +37,9 @@ import java.util.Arrays;
 import java.util.Deque;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
+import javafx.util.Pair;
 
 import static org.apache.iotdb.commons.schema.SchemaConstant.ENTITY_MNODE_TYPE;
 import static org.apache.iotdb.commons.schema.SchemaConstant.INTERNAL_MNODE_TYPE;
@@ -52,13 +57,15 @@ public class SchemaRegionSnapshotParser {
 
   private static final String TMP_PREFIX = ".tmp.";
 
-  private static final IoTDBConfig config = IoTDBDescriptor.getInstance().getConfig();
+  private static final IoTDBConfig CONFIG = IoTDBDescriptor.getInstance().getConfig();
+
+  private static final CommonConfig COMMON_CONFIG = CommonDescriptor.getInstance().getConfig();
 
   private static final IMNodeFactory<IMemMNode> nodeFactory =
       MNodeFactoryLoader.getInstance().getMemMNodeIMNodeFactory();;
 
   public static List<SchemaRegionSnapshotUnit> getSnapshotPaths() {
-    String snapshotPath = config.getSchemaRegionConsensusDir();
+    String snapshotPath = CONFIG.getSchemaRegionConsensusDir();
     File snapshotDir = new File(snapshotPath);
     ArrayList<Path> schemaRegionList = new ArrayList<>();
     try (DirectoryStream<Path> stream = Files.newDirectoryStream(snapshotDir.toPath())) {
@@ -126,7 +133,7 @@ public class SchemaRegionSnapshotParser {
   }
 
   public static List<SchemaRegionSnapshotUnit> getSnapshotPaths(String snapshotId) {
-    String snapshotPath = config.getSchemaRegionConsensusDir();
+    String snapshotPath = CONFIG.getSchemaRegionConsensusDir();
     File snapshotDir = new File(snapshotPath);
     ArrayList<Path> schemaRegionList = new ArrayList<>();
     try (DirectoryStream<Path> stream = Files.newDirectoryStream(snapshotDir.toPath())) {
@@ -169,18 +176,36 @@ public class SchemaRegionSnapshotParser {
     return snapshotUnits;
   }
 
-  public static Iterable<Statement> translate2Statements(File snapshotFile) throws IOException {
-    if (!snapshotFile.exists()) {
+  public static Iterable<Statement> translate2Statements(SchemaRegionSnapshotUnit snapshotUnit)
+      throws IOException {
+    if (snapshotUnit.left == null) {
+      return null;
+    }
+    File mtreefile = snapshotUnit.left.toFile();
+    File tagfile;
+    if (snapshotUnit.right != null && snapshotUnit.right.toFile().exists()) {
+      tagfile = snapshotUnit.right.toFile();
+    } else {
+      tagfile = null;
+    }
+
+    if (!mtreefile.exists()) {
       return null;
     }
 
-    if (!snapshotFile.getName().equals(SchemaConstant.MTREE_SNAPSHOT)) {
+    if (!mtreefile.getName().equals(SchemaConstant.MTREE_SNAPSHOT)) {
       throw new IllegalArgumentException(
           String.format(
               "%s is not allowed, only support %s",
-              snapshotFile.getName(), SchemaConstant.MTREE_SNAPSHOT));
+              mtreefile.getName(), SchemaConstant.MTREE_SNAPSHOT));
     }
-    gener = new StatementGener(snapshotFile);
+    if (tagfile != null && !tagfile.getName().equals(SchemaConstant.TAG_LOG_SNAPSHOT)) {
+      throw new IllegalArgumentException(
+          String.format(
+              " %s is not allowed, only support %s",
+              tagfile.getName(), SchemaConstant.TAG_LOG_SNAPSHOT));
+    }
+    gener = new StatementGener(mtreefile, tagfile);
     return () -> gener;
   }
 
@@ -193,29 +218,41 @@ public class SchemaRegionSnapshotParser {
   private static class StatementGener implements Iterator<Statement> {
     private IMemMNode curNode;
 
-    private IMemMNode root;
-
     private Exception lastExcept = null;
 
+    // input file stream: mtree file and tag file
     private final InputStream inputStream;
 
-    // 帮助记录遍历进度
-    private Deque<IMemMNode> ancestors = new ArrayDeque<>();
-    private Deque<Integer> restChildrenNum = new ArrayDeque<>();
+    private final FileChannel tagFileChannel;
 
-    private Deque<Statement> statements = new ArrayDeque<>();
+    // help to record the state of traversing
+    private final Deque<IMemMNode> ancestors = new ArrayDeque<>();
+    private final Deque<Integer> restChildrenNum = new ArrayDeque<>();
+
+    // Iterable statements
+
+    private final Deque<Statement> statements = new ArrayDeque<>();
+
+    // utils
 
     private final MNodeTranslater translater = new MNodeTranslater();
 
     private final MNodeDeserializer deserializer = new MNodeDeserializer();
 
-    public StatementGener(File snapshotFile) throws IOException {
+    public StatementGener(File mtreeFile, File tagFile) throws IOException {
 
-      this.inputStream = new FileInputStream(snapshotFile);
+      this.inputStream = Files.newInputStream(mtreeFile.toPath());
+
+      if (tagFile != null) {
+        this.tagFileChannel = FileChannel.open(tagFile.toPath(), StandardOpenOption.READ);
+      } else {
+        this.tagFileChannel = null;
+      }
+
       Byte version = ReadWriteIOUtils.readByte(this.inputStream);
-      this.root =
+      // root
+      this.curNode =
           deserializeMNode(this.ancestors, this.restChildrenNum, deserializer, this.inputStream);
-      this.curNode = this.root;
     }
 
     @Override
@@ -263,10 +300,10 @@ public class SchemaRegionSnapshotParser {
       }
       try {
         this.inputStream.close();
+        this.tagFileChannel.close();
       } catch (IOException e) {
         this.lastExcept = e;
       }
-
       return false;
     }
 
@@ -287,7 +324,6 @@ public class SchemaRegionSnapshotParser {
       throws IOException {
     byte type = ReadWriteIOUtils.readByte(inputStream);
     int childrenNum;
-    String name;
     IMemMNode node;
     switch (type) {
       case INTERNAL_MNODE_TYPE:
@@ -319,10 +355,11 @@ public class SchemaRegionSnapshotParser {
     }
 
     if (!ancestors.isEmpty()) {
+      IMemMNode parent = ancestors.peek();
       node.setParent(ancestors.peek());
-      ancestors.peek().addChild(node);
-      if (ancestors.peek().isDevice() && ancestors.peek().getAsDeviceMNode().isAligned()) {
-        // Aligned node's chlid will not be translated to statements
+      parent.addChild(node);
+      if (parent.isDevice() && parent.getAsDeviceMNode().isAligned()) {
+        // Skip aligned device's children
         node.getAsMeasurementMNode().setOffset(-2);
       }
     }
@@ -349,8 +386,7 @@ public class SchemaRegionSnapshotParser {
     public Statement visitDatabaseMNode(
         AbstractDatabaseMNode<?, ? extends IMNode<?>> node, PartialPath path) {
       if (node.isDevice()) {
-        Statement stmt = genActivateTemplateStatement(node, path);
-        return stmt == null ? genAlignedTimeseriesStatement(node, path) : null;
+        return genActivateTemplateStatement(node, path);
       }
       return null;
     }
@@ -358,7 +394,7 @@ public class SchemaRegionSnapshotParser {
     @Override
     public Statement visitMeasurementMNode(
         AbstractMeasurementMNode<?, ? extends IMNode<?>> node, PartialPath path) {
-      if (node.isLogicalView() || node.getOffset() == -2) {
+      if (node.isLogicalView()) {
         return null;
       } else {
         CreateTimeSeriesStatement stmt = new CreateTimeSeriesStatement();
@@ -367,6 +403,25 @@ public class SchemaRegionSnapshotParser {
         stmt.setCompressor(node.getAsMeasurementMNode().getSchema().getCompressor());
         stmt.setDataType(node.getDataType());
         stmt.setEncoding(node.getAsMeasurementMNode().getSchema().getEncodingType());
+        if (node.getOffset() >= 0) {
+          if (gener.tagFileChannel != null) {
+            try {
+              ByteBuffer byteBuffer = ByteBuffer.allocate(COMMON_CONFIG.getTagAttributeTotalSize());
+              gener.tagFileChannel.read(byteBuffer, node.getOffset());
+              byteBuffer.flip();
+              Pair<Map<String, String>, Map<String, String>> tagsAndAttributes =
+                  new Pair<>(
+                      ReadWriteIOUtils.readMap(byteBuffer), ReadWriteIOUtils.readMap(byteBuffer));
+              stmt.setTags(tagsAndAttributes.getKey());
+              stmt.setAttributes(tagsAndAttributes.getValue());
+            } catch (IOException exception) {
+              gener.lastExcept = exception;
+              LOGGER.warn("error when parser tag and attributes files", exception);
+            }
+          } else {
+            LOGGER.warn("timeserie has attributes and tags but don't find tag file");
+          }
+        }
         // if measurement 's offset = -2, we should skip this node.
         node.setOffset(-2);
         return stmt;

@@ -3,10 +3,8 @@ package org.apache.iotdb.db.utils;
 import org.apache.iotdb.commons.conf.CommonConfig;
 import org.apache.iotdb.commons.conf.CommonDescriptor;
 import org.apache.iotdb.commons.consensus.SchemaRegionId;
-import org.apache.iotdb.commons.file.SystemFileFactory;
 import org.apache.iotdb.commons.path.PartialPath;
 import org.apache.iotdb.commons.schema.SchemaConstant;
-import org.apache.iotdb.consensus.ratis.utils.Utils;
 import org.apache.iotdb.db.conf.IoTDBConfig;
 import org.apache.iotdb.db.conf.IoTDBDescriptor;
 import org.apache.iotdb.db.queryengine.plan.statement.Statement;
@@ -19,12 +17,12 @@ import org.apache.iotdb.db.schemaengine.schemaregion.write.req.ICreateTimeSeries
 import org.apache.iotdb.db.schemaengine.schemaregion.write.req.SchemaRegionWritePlanFactory;
 import org.apache.iotdb.db.schemaengine.template.Template;
 import org.apache.iotdb.db.tools.schema.SchemaRegionSnapshotParser;
+import org.apache.iotdb.db.tools.schema.SchemaRegionSnapshotUnit;
 import org.apache.iotdb.tsfile.file.metadata.enums.CompressionType;
 import org.apache.iotdb.tsfile.file.metadata.enums.TSDataType;
 import org.apache.iotdb.tsfile.file.metadata.enums.TSEncoding;
 
 import org.apache.commons.io.FileUtils;
-import org.apache.ratis.protocol.RaftGroupId;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -34,6 +32,7 @@ import org.junit.runners.Parameterized;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Paths;
 import java.util.*;
 
 @RunWith(Parameterized.class)
@@ -200,14 +199,16 @@ public class SchemaRegionSnapshotParserTest {
     snapshotDir.mkdir();
     schemaRegion.createSnapshot(snapshotDir);
 
-    File snapshot =
-        SystemFileFactory.INSTANCE.getFile(
-            config.getSchemaDir()
-                + File.separator
-                + "snapshot"
-                + File.separator
-                + snapshotFileName);
-    Iterable<Statement> statements = SchemaRegionSnapshotParser.translate2Statements(snapshot);
+    SchemaRegionSnapshotUnit snapshotUnit =
+        new SchemaRegionSnapshotUnit(
+            Paths.get(
+                config.getSchemaDir()
+                    + File.separator
+                    + "snapshot"
+                    + File.separator
+                    + snapshotFileName),
+            null);
+    Iterable<Statement> statements = SchemaRegionSnapshotParser.translate2Statements(snapshotUnit);
     int count = 0;
     SchemaRegionSnapshotParser.parserFinshWithoutExp();
     assert statements != null;
@@ -269,20 +270,21 @@ public class SchemaRegionSnapshotParserTest {
     File snapshotDir = new File(config.getSchemaDir() + File.separator + "snapshot");
     snapshotDir.mkdir();
     schemaRegion.createSnapshot(snapshotDir);
-    File snapshot =
-        SystemFileFactory.INSTANCE.getFile(
-            config.getSchemaDir()
-                + File.separator
-                + "snapshot"
-                + File.separator
-                + snapshotFileName);
-    Iterable<Statement> statements = SchemaRegionSnapshotParser.translate2Statements(snapshot);
+    SchemaRegionSnapshotUnit snapshotUnit =
+        new SchemaRegionSnapshotUnit(
+            Paths.get(
+                config.getSchemaDir()
+                    + File.separator
+                    + "snapshot"
+                    + File.separator
+                    + snapshotFileName),
+            null);
+    Iterable<Statement> statements = SchemaRegionSnapshotParser.translate2Statements(snapshotUnit);
     int count = 0;
     SchemaRegionSnapshotParser.parserFinshWithoutExp();
     assert statements != null;
-    for (Statement stmt : statements) {
-      count++;
-    }
+    for (Statement stmt : statements) {}
+
     Assert.assertEquals(1, count);
   }
 
@@ -347,14 +349,17 @@ public class SchemaRegionSnapshotParserTest {
     File snapshotDir = new File(config.getSchemaDir() + File.separator + "snapshot");
     snapshotDir.mkdir();
     schemaRegion.createSnapshot(snapshotDir);
-    File snapshot =
-        SystemFileFactory.INSTANCE.getFile(
-            config.getSchemaDir()
-                + File.separator
-                + "snapshot"
-                + File.separator
-                + snapshotFileName);
-    Iterable<Statement> statements = SchemaRegionSnapshotParser.translate2Statements(snapshot);
+    SchemaRegionSnapshotUnit snapshotUnit =
+        new SchemaRegionSnapshotUnit(
+            Paths.get(
+                config.getSchemaDir()
+                    + File.separator
+                    + "snapshot"
+                    + File.separator
+                    + snapshotFileName),
+            null);
+
+    Iterable<Statement> statements = SchemaRegionSnapshotParser.translate2Statements(snapshotUnit);
     int count = 0;
     SchemaRegionSnapshotParser.parserFinshWithoutExp();
     assert statements != null;
@@ -366,12 +371,5 @@ public class SchemaRegionSnapshotParserTest {
       }
     }
     Assert.assertEquals(2, count);
-  }
-
-  @Test
-  public void test() {
-    SchemaRegionId id = new SchemaRegionId(0);
-    RaftGroupId raftid = Utils.fromConsensusGroupIdToRaftGroupId(id);
-    System.out.println(raftid);
   }
 }
