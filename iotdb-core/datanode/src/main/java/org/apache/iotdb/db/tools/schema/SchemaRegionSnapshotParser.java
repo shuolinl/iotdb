@@ -9,7 +9,6 @@ import org.apache.iotdb.commons.schema.node.IMNode;
 import org.apache.iotdb.commons.schema.node.common.AbstractDatabaseMNode;
 import org.apache.iotdb.commons.schema.node.common.AbstractMeasurementMNode;
 import org.apache.iotdb.commons.schema.node.utils.IMNodeContainer;
-import org.apache.iotdb.commons.schema.node.utils.IMNodeFactory;
 import org.apache.iotdb.commons.schema.node.visitor.MNodeVisitor;
 import org.apache.iotdb.db.conf.IoTDBConfig;
 import org.apache.iotdb.db.conf.IoTDBDescriptor;
@@ -19,7 +18,7 @@ import org.apache.iotdb.db.queryengine.plan.statement.metadata.CreateTimeSeriesS
 import org.apache.iotdb.db.queryengine.plan.statement.metadata.template.ActivateTemplateStatement;
 import org.apache.iotdb.db.schemaengine.schemaregion.mtree.impl.mem.mnode.IMemMNode;
 import org.apache.iotdb.db.schemaengine.schemaregion.mtree.impl.mem.snapshot.MemMTreeSnapshotUtil.MNodeDeserializer;
-import org.apache.iotdb.db.schemaengine.schemaregion.mtree.loader.MNodeFactoryLoader;
+import org.apache.iotdb.tsfile.utils.Pair;
 import org.apache.iotdb.tsfile.utils.ReadWriteIOUtils;
 
 import org.slf4j.Logger;
@@ -39,7 +38,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
-import javafx.util.Pair;
 
 import static org.apache.iotdb.commons.schema.SchemaConstant.ENTITY_MNODE_TYPE;
 import static org.apache.iotdb.commons.schema.SchemaConstant.INTERNAL_MNODE_TYPE;
@@ -53,16 +51,11 @@ public class SchemaRegionSnapshotParser {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(SchemaRegionSnapshotParser.class);
 
-  private static StatementGener gener;
-
-  private static final String TMP_PREFIX = ".tmp.";
+  private static StatementGener statementGener;
 
   private static final IoTDBConfig CONFIG = IoTDBDescriptor.getInstance().getConfig();
 
   private static final CommonConfig COMMON_CONFIG = CommonDescriptor.getInstance().getConfig();
-
-  private static final IMNodeFactory<IMemMNode> nodeFactory =
-      MNodeFactoryLoader.getInstance().getMemMNodeIMNodeFactory();;
 
   public static List<SchemaRegionSnapshotUnit> getSnapshotPaths() {
     String snapshotPath = CONFIG.getSchemaRegionConsensusDir();
@@ -116,11 +109,10 @@ public class SchemaRegionSnapshotParser {
     for (Path path : latestSnapshots) {
 
       File mtreeSnapshot =
-          SystemFileFactory.INSTANCE.getFile(
-              path.toString() + File.separator + SchemaConstant.MTREE_SNAPSHOT);
+          SystemFileFactory.INSTANCE.getFile(path + File.separator + SchemaConstant.MTREE_SNAPSHOT);
       File tagSnapshot =
           SystemFileFactory.INSTANCE.getFile(
-              path.toString() + File.separator + SchemaConstant.TAG_LOG_SNAPSHOT);
+              path + File.separator + SchemaConstant.TAG_LOG_SNAPSHOT);
       SchemaRegionSnapshotUnit unit =
           new SchemaRegionSnapshotUnit(
               mtreeSnapshot.exists() ? mtreeSnapshot.toPath() : null,
@@ -152,7 +144,7 @@ public class SchemaRegionSnapshotParser {
     ArrayList<Path> snapshotPathList = new ArrayList<>();
     for (Path path : schemaRegionList) {
       File targetPath =
-          SystemFileFactory.INSTANCE.getFile(path.toString() + "sm" + snapshotPathList);
+          SystemFileFactory.INSTANCE.getFile(path.toString() + File.separator + "sm" + snapshotId);
       if (targetPath.exists() && targetPath.isDirectory()) {
         snapshotPathList.add(targetPath.toPath());
       }
@@ -160,11 +152,10 @@ public class SchemaRegionSnapshotParser {
     ArrayList<SchemaRegionSnapshotUnit> snapshotUnits = new ArrayList<>();
     for (Path path : snapshotPathList) {
       File mtreeSnapshot =
-          SystemFileFactory.INSTANCE.getFile(
-              path.toString() + File.separator + SchemaConstant.MTREE_SNAPSHOT);
+          SystemFileFactory.INSTANCE.getFile(path + File.separator + SchemaConstant.MTREE_SNAPSHOT);
       File tagSnapshot =
           SystemFileFactory.INSTANCE.getFile(
-              path.toString() + File.separator + SchemaConstant.TAG_LOG_SNAPSHOT);
+              path + File.separator + SchemaConstant.TAG_LOG_SNAPSHOT);
       SchemaRegionSnapshotUnit unit =
           new SchemaRegionSnapshotUnit(
               mtreeSnapshot.exists() ? mtreeSnapshot.toPath() : null,
@@ -205,12 +196,12 @@ public class SchemaRegionSnapshotParser {
               " %s is not allowed, only support %s",
               tagfile.getName(), SchemaConstant.TAG_LOG_SNAPSHOT));
     }
-    gener = new StatementGener(mtreefile, tagfile);
-    return () -> gener;
+    statementGener = new StatementGener(mtreefile, tagfile);
+    return () -> statementGener;
   }
 
   public static void parserFinshWithoutExp() throws IOException {
-    if (gener.lastExcept != null) {
+    if (statementGener.lastExcept != null) {
       throw new IOException();
     }
   }
@@ -254,7 +245,11 @@ public class SchemaRegionSnapshotParser {
       this.curNode =
           deserializeMNode(this.ancestors, this.restChildrenNum, deserializer, this.inputStream);
     }
-
+    /**
+     * 对于 measurement 节点，需要考虑如下场景： 1. 如果 Aligned timeseries ，那么measurement 节点无需根据节点创建， 2. 如果是普通的
+     * timeseries ，需要在遍历measurement的时候构造创建节点 如果遍历到 aligned timeseries,
+     * 需要保证他们的子节点不创建timeseries，并且不添加tag 如果遍历到 timeseries，
+     */
     @Override
     public boolean hasNext() {
       if (!this.statements.isEmpty()) {
@@ -266,9 +261,11 @@ public class SchemaRegionSnapshotParser {
           IMemMNode node = this.ancestors.pop();
           if (node.isDevice() && node.getAsDeviceMNode().isAligned()) {
             Statement stmt =
-                translater.genAlignedTimeseriesStatement(
-                    node, new PartialPath(new String[] {"root"}).concatPath(node.getPartialPath()));
-            this.statements.add(stmt);
+                genAlignedTimeseriesStatement(
+                    node,
+                    new PartialPath(new String[] {"root"}).concatPath(node.getPartialPath()),
+                    this.tagFileChannel);
+            this.statements.push(stmt);
             return true;
           }
         } else {
@@ -289,9 +286,8 @@ public class SchemaRegionSnapshotParser {
               this.curNode.accept(
                   translater,
                   new PartialPath(new String[] {"root"}).concatPath(this.curNode.getPartialPath()));
-          while (stmt != null) {
+          if (stmt != null) {
             this.statements.push(stmt);
-            stmt = this.curNode.accept(translater, this.curNode.getPartialPath());
           }
           if (!this.statements.isEmpty()) {
             return true;
@@ -300,7 +296,9 @@ public class SchemaRegionSnapshotParser {
       }
       try {
         this.inputStream.close();
-        this.tagFileChannel.close();
+        if (this.tagFileChannel != null) {
+          this.tagFileChannel.close();
+        }
       } catch (IOException e) {
         this.lastExcept = e;
       }
@@ -314,138 +312,163 @@ public class SchemaRegionSnapshotParser {
       }
       return this.statements.pop();
     }
-  }
 
-  private static IMemMNode deserializeMNode(
-      Deque<IMemMNode> ancestors,
-      Deque<Integer> restChildrenNum,
-      MNodeDeserializer deserializer,
-      InputStream inputStream)
-      throws IOException {
-    byte type = ReadWriteIOUtils.readByte(inputStream);
-    int childrenNum;
-    IMemMNode node;
-    switch (type) {
-      case INTERNAL_MNODE_TYPE:
-        childrenNum = ReadWriteIOUtils.readInt(inputStream);
-        node = deserializer.deserializeInternalMNode(inputStream);
-        break;
-      case STORAGE_GROUP_MNODE_TYPE:
-        childrenNum = ReadWriteIOUtils.readInt(inputStream);
-        node = deserializer.deserializeStorageGroupMNode(inputStream);
-        break;
-      case ENTITY_MNODE_TYPE:
-        childrenNum = ReadWriteIOUtils.readInt(inputStream);
-        node = deserializer.deserializeEntityMNode(inputStream);
-        break;
-      case STORAGE_GROUP_ENTITY_MNODE_TYPE:
-        childrenNum = ReadWriteIOUtils.readInt(inputStream);
-        node = deserializer.deserializeStorageGroupEntityMNode(inputStream);
-        break;
-      case MEASUREMENT_MNODE_TYPE:
-        childrenNum = 0;
-        node = deserializer.deserializeMeasurementMNode(inputStream);
-        break;
-      case LOGICAL_VIEW_MNODE_TYPE:
-        childrenNum = 0;
-        node = deserializer.deserializeLogicalViewMNode(inputStream);
-        break;
-      default:
-        throw new IOException("Unrecognized MNode type" + type);
-    }
-
-    if (!ancestors.isEmpty()) {
-      IMemMNode parent = ancestors.peek();
-      node.setParent(ancestors.peek());
-      parent.addChild(node);
-      if (parent.isDevice() && parent.getAsDeviceMNode().isAligned()) {
-        // Skip aligned device's children
-        node.getAsMeasurementMNode().setOffset(-2);
+    private static IMemMNode deserializeMNode(
+        Deque<IMemMNode> ancestors,
+        Deque<Integer> restChildrenNum,
+        MNodeDeserializer deserializer,
+        InputStream inputStream)
+        throws IOException {
+      byte type = ReadWriteIOUtils.readByte(inputStream);
+      int childrenNum;
+      IMemMNode node;
+      switch (type) {
+        case INTERNAL_MNODE_TYPE:
+          childrenNum = ReadWriteIOUtils.readInt(inputStream);
+          node = deserializer.deserializeInternalMNode(inputStream);
+          break;
+        case STORAGE_GROUP_MNODE_TYPE:
+          childrenNum = ReadWriteIOUtils.readInt(inputStream);
+          node = deserializer.deserializeStorageGroupMNode(inputStream);
+          break;
+        case ENTITY_MNODE_TYPE:
+          childrenNum = ReadWriteIOUtils.readInt(inputStream);
+          node = deserializer.deserializeEntityMNode(inputStream);
+          break;
+        case STORAGE_GROUP_ENTITY_MNODE_TYPE:
+          childrenNum = ReadWriteIOUtils.readInt(inputStream);
+          node = deserializer.deserializeStorageGroupEntityMNode(inputStream);
+          break;
+        case MEASUREMENT_MNODE_TYPE:
+          childrenNum = 0;
+          node = deserializer.deserializeMeasurementMNode(inputStream);
+          break;
+        case LOGICAL_VIEW_MNODE_TYPE:
+          childrenNum = 0;
+          node = deserializer.deserializeLogicalViewMNode(inputStream);
+          break;
+        default:
+          throw new IOException("Unrecognized MNode type" + type);
       }
-    }
 
-    if (childrenNum > 0 || isStorageGroupType(type)) {
-      ancestors.push(node);
-      restChildrenNum.push(childrenNum);
-    }
-    return node;
-  }
-
-  private static class MNodeTranslater extends MNodeVisitor<Statement, PartialPath> {
-
-    @Override
-    public Statement visitBasicMNode(IMNode<?> node, PartialPath path) {
-      if (node.isDevice()) {
-        // Aligned timeserie will be created when node pop.
-        return genActivateTemplateStatement(node, path);
+      if (!ancestors.isEmpty()) {
+        IMemMNode parent = ancestors.peek();
+        node.setParent(ancestors.peek());
+        parent.addChild(node);
       }
-      return null;
-    }
 
-    @Override
-    public Statement visitDatabaseMNode(
-        AbstractDatabaseMNode<?, ? extends IMNode<?>> node, PartialPath path) {
-      if (node.isDevice()) {
-        return genActivateTemplateStatement(node, path);
+      if (childrenNum > 0 || isStorageGroupType(type)) {
+        ancestors.push(node);
+        restChildrenNum.push(childrenNum);
       }
-      return null;
+      return node;
     }
 
-    @Override
-    public Statement visitMeasurementMNode(
-        AbstractMeasurementMNode<?, ? extends IMNode<?>> node, PartialPath path) {
-      if (node.isLogicalView()) {
-        return null;
-      } else {
-        CreateTimeSeriesStatement stmt = new CreateTimeSeriesStatement();
-        stmt.setPath(path);
-        stmt.setAlias(node.getAlias());
-        stmt.setCompressor(node.getAsMeasurementMNode().getSchema().getCompressor());
-        stmt.setDataType(node.getDataType());
-        stmt.setEncoding(node.getAsMeasurementMNode().getSchema().getEncodingType());
-        if (node.getOffset() >= 0) {
-          if (gener.tagFileChannel != null) {
-            try {
-              ByteBuffer byteBuffer = ByteBuffer.allocate(COMMON_CONFIG.getTagAttributeTotalSize());
-              gener.tagFileChannel.read(byteBuffer, node.getOffset());
-              byteBuffer.flip();
-              Pair<Map<String, String>, Map<String, String>> tagsAndAttributes =
-                  new Pair<>(
-                      ReadWriteIOUtils.readMap(byteBuffer), ReadWriteIOUtils.readMap(byteBuffer));
-              stmt.setTags(tagsAndAttributes.getKey());
-              stmt.setAttributes(tagsAndAttributes.getValue());
-            } catch (IOException exception) {
-              gener.lastExcept = exception;
-              LOGGER.warn("error when parser tag and attributes files", exception);
-            }
-          } else {
-            LOGGER.warn("timeserie has attributes and tags but don't find tag file");
-          }
+    private static class MNodeTranslater extends MNodeVisitor<Statement, PartialPath> {
+
+      @Override
+      public Statement visitBasicMNode(IMNode<?> node, PartialPath path) {
+        if (node.isDevice()) {
+          // Aligned timeserie will be created when node pop.
+          return StatementGener.genActivateTemplateStatement(node, path);
         }
-        // if measurement 's offset = -2, we should skip this node.
-        node.setOffset(-2);
-        return stmt;
+        return null;
+      }
+
+      @Override
+      public Statement visitDatabaseMNode(
+          AbstractDatabaseMNode<?, ? extends IMNode<?>> node, PartialPath path) {
+        if (node.isDevice()) {
+          return StatementGener.genActivateTemplateStatement(node, path);
+        }
+        return null;
+      }
+
+      @Override
+      public Statement visitMeasurementMNode(
+          AbstractMeasurementMNode<?, ? extends IMNode<?>> node, PartialPath path) {
+        if (node.isLogicalView() || node.getParent().getAsDeviceMNode().isAligned()) {
+          return null;
+        } else {
+          CreateTimeSeriesStatement stmt = new CreateTimeSeriesStatement();
+          stmt.setPath(path);
+          stmt.setAlias(node.getAlias());
+          stmt.setCompressor(node.getAsMeasurementMNode().getSchema().getCompressor());
+          stmt.setDataType(node.getDataType());
+          stmt.setEncoding(node.getAsMeasurementMNode().getSchema().getEncodingType());
+          if (node.getOffset() != 0) {
+            if (statementGener.tagFileChannel != null) {
+              try {
+                ByteBuffer byteBuffer =
+                    ByteBuffer.allocate(COMMON_CONFIG.getTagAttributeTotalSize());
+                statementGener.tagFileChannel.read(byteBuffer, node.getOffset());
+                byteBuffer.flip();
+                Pair<Map<String, String>, Map<String, String>> tagsAndAttributes =
+                    new Pair<>(
+                        ReadWriteIOUtils.readMap(byteBuffer), ReadWriteIOUtils.readMap(byteBuffer));
+                stmt.setTags(tagsAndAttributes.left);
+                stmt.setAttributes(tagsAndAttributes.right);
+              } catch (IOException exception) {
+                statementGener.lastExcept = exception;
+                LOGGER.warn("error when parser tag and attributes files", exception);
+              }
+            } else {
+              LOGGER.warn("timeserie has attributes and tags but don't find tag file");
+            }
+          }
+          return stmt;
+        }
       }
     }
 
-    private Statement genActivateTemplateStatement(IMNode node, PartialPath path) {
+    private static Statement genActivateTemplateStatement(IMNode node, PartialPath path) {
       if (node.getAsDeviceMNode().isUseTemplate()) {
-        node.getAsDeviceMNode().setUseTemplate(false);
         return new ActivateTemplateStatement(path);
       }
       return null;
     }
 
-    private Statement genAlignedTimeseriesStatement(IMNode node, PartialPath path) {
+    private static Statement genAlignedTimeseriesStatement(
+        IMNode node, PartialPath path, FileChannel tagFileChannel) {
       IMNodeContainer<IMemMNode> measurements = node.getAsInternalMNode().getChildren();
       if (node.getAsDeviceMNode().isAligned()) {
         CreateAlignedTimeSeriesStatement stmt = new CreateAlignedTimeSeriesStatement();
+        stmt.setDevicePath(path);
         for (IMemMNode measurement : measurements.values()) {
           stmt.addMeasurement(measurement.getName());
           stmt.addDataType(measurement.getAsMeasurementMNode().getDataType());
           stmt.addAliasList(measurement.getAlias());
-          stmt.addEncoding(measurement.getAsMeasurementMNode().getSchema().getTimeTSEncoding());
+          stmt.addEncoding(measurement.getAsMeasurementMNode().getSchema().getEncodingType());
           stmt.addCompressor(measurement.getAsMeasurementMNode().getSchema().getCompressor());
+          if (measurement.getAsMeasurementMNode().getOffset() >= 0) {
+            if (tagFileChannel != null) {
+              try {
+                ByteBuffer byteBuffer =
+                    ByteBuffer.allocate(COMMON_CONFIG.getTagAttributeTotalSize());
+                tagFileChannel.read(byteBuffer, measurement.getAsMeasurementMNode().getOffset());
+                byteBuffer.flip();
+                Pair<Map<String, String>, Map<String, String>> tagsAndAttributes =
+                    new Pair<>(
+                        ReadWriteIOUtils.readMap(byteBuffer), ReadWriteIOUtils.readMap(byteBuffer));
+                stmt.addAttributesList(tagsAndAttributes.right);
+                stmt.addTagsList(tagsAndAttributes.left);
+              } catch (IOException exception) {
+                LOGGER.warn(
+                    "error when parse tag and attributes file of node path {}",
+                    measurement.getPartialPath().toString(),
+                    exception);
+                stmt.addTagsList(null);
+                stmt.addAttributesList(null);
+              }
+            } else {
+              LOGGER.warn("measurement has set attributes or tags, but dont find snapshot files");
+              stmt.addAttributesList(null);
+              stmt.addTagsList(null);
+            }
+          } else {
+            stmt.addAttributesList(null);
+            stmt.addTagsList(null);
+          }
         }
         return stmt;
       }
