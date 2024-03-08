@@ -167,8 +167,8 @@ public class SchemaRegionSnapshotParser {
     return snapshotUnits;
   }
 
-  public static Iterable<Statement> translate2Statements(SchemaRegionSnapshotUnit snapshotUnit)
-      throws IOException {
+  public static Iterable<Statement> translate2Statements(
+      SchemaRegionSnapshotUnit snapshotUnit, PartialPath databasePath) throws IOException {
     if (snapshotUnit.left == null) {
       return null;
     }
@@ -196,7 +196,7 @@ public class SchemaRegionSnapshotParser {
               " %s is not allowed, only support %s",
               tagfile.getName(), SchemaConstant.TAG_LOG_SNAPSHOT));
     }
-    statementGener = new StatementGener(mtreefile, tagfile);
+    statementGener = new StatementGener(mtreefile, tagfile, databasePath);
     return () -> statementGener;
   }
 
@@ -219,6 +219,7 @@ public class SchemaRegionSnapshotParser {
     // help to record the state of traversing
     private final Deque<IMemMNode> ancestors = new ArrayDeque<>();
     private final Deque<Integer> restChildrenNum = new ArrayDeque<>();
+    private final PartialPath databaseFullPath;
 
     // Iterable statements
 
@@ -230,7 +231,8 @@ public class SchemaRegionSnapshotParser {
 
     private final MNodeDeserializer deserializer = new MNodeDeserializer();
 
-    public StatementGener(File mtreeFile, File tagFile) throws IOException {
+    public StatementGener(File mtreeFile, File tagFile, PartialPath databaseFullPath)
+        throws IOException {
 
       this.inputStream = Files.newInputStream(mtreeFile.toPath());
 
@@ -240,8 +242,9 @@ public class SchemaRegionSnapshotParser {
         this.tagFileChannel = null;
       }
 
+      this.databaseFullPath = databaseFullPath;
+
       Byte version = ReadWriteIOUtils.readByte(this.inputStream);
-      // root
       this.curNode =
           deserializeMNode(this.ancestors, this.restChildrenNum, deserializer, this.inputStream);
     }
@@ -263,7 +266,7 @@ public class SchemaRegionSnapshotParser {
             Statement stmt =
                 genAlignedTimeseriesStatement(
                     node,
-                    new PartialPath(new String[] {"root"}).concatPath(node.getPartialPath()),
+                    this.databaseFullPath.getDevicePath().concatPath(node.getPartialPath()),
                     this.tagFileChannel);
             this.statements.push(stmt);
             return true;
@@ -285,7 +288,7 @@ public class SchemaRegionSnapshotParser {
           Statement stmt =
               this.curNode.accept(
                   translater,
-                  new PartialPath(new String[] {"root"}).concatPath(this.curNode.getPartialPath()));
+                  this.databaseFullPath.getDevicePath().concatPath(this.curNode.getPartialPath()));
           if (stmt != null) {
             this.statements.push(stmt);
           }
@@ -437,7 +440,11 @@ public class SchemaRegionSnapshotParser {
         for (IMemMNode measurement : measurements.values()) {
           stmt.addMeasurement(measurement.getName());
           stmt.addDataType(measurement.getAsMeasurementMNode().getDataType());
-          stmt.addAliasList(measurement.getAlias());
+          if (measurement.getAlias() != null) {
+            stmt.addAliasList(measurement.getAlias());
+          } else {
+            stmt.addAliasList(null);
+          }
           stmt.addEncoding(measurement.getAsMeasurementMNode().getSchema().getEncodingType());
           stmt.addCompressor(measurement.getAsMeasurementMNode().getSchema().getCompressor());
           if (measurement.getAsMeasurementMNode().getOffset() >= 0) {
@@ -457,17 +464,10 @@ public class SchemaRegionSnapshotParser {
                     "error when parse tag and attributes file of node path {}",
                     measurement.getPartialPath().toString(),
                     exception);
-                stmt.addTagsList(null);
-                stmt.addAttributesList(null);
               }
             } else {
               LOGGER.warn("measurement has set attributes or tags, but dont find snapshot files");
-              stmt.addAttributesList(null);
-              stmt.addTagsList(null);
             }
-          } else {
-            stmt.addAttributesList(null);
-            stmt.addTagsList(null);
           }
         }
         return stmt;

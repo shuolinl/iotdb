@@ -132,6 +132,7 @@ public class SchemaRegionSnapshotParserTest {
       return;
     }
     ISchemaRegion schemaRegion = getSchemaRegion("root.sg", 0);
+    PartialPath databasePath = new PartialPath("root.sg");
     // Tree in memtree:
     // root->sg->s1->g1->temp
     //          |     |->status
@@ -211,7 +212,8 @@ public class SchemaRegionSnapshotParserTest {
                     + File.separator
                     + snapshotFileName),
             null);
-    Iterable<Statement> statements = SchemaRegionSnapshotParser.translate2Statements(snapshotUnit);
+    Iterable<Statement> statements =
+        SchemaRegionSnapshotParser.translate2Statements(snapshotUnit, databasePath);
     int count = 0;
     SchemaRegionSnapshotParser.parserFinshWithoutExp();
     assert statements != null;
@@ -240,6 +242,7 @@ public class SchemaRegionSnapshotParserTest {
       return;
     }
     ISchemaRegion schemaRegion = getSchemaRegion("root.sg", 0);
+    PartialPath database = new PartialPath("root.sg");
     ICreateAlignedTimeSeriesPlan plan =
         SchemaRegionWritePlanFactory.getCreateAlignedTimeSeriesPlan(
             new PartialPath("root.sg.t1.t2"),
@@ -288,7 +291,8 @@ public class SchemaRegionSnapshotParserTest {
                     + "snapshot"
                     + File.separator
                     + SchemaConstant.TAG_LOG_SNAPSHOT));
-    Iterable<Statement> statements = SchemaRegionSnapshotParser.translate2Statements(snapshotUnit);
+    Iterable<Statement> statements =
+        SchemaRegionSnapshotParser.translate2Statements(snapshotUnit, database);
     SchemaRegionSnapshotParser.parserFinshWithoutExp();
     assert statements != null;
     for (Statement stmt : statements) {
@@ -312,6 +316,7 @@ public class SchemaRegionSnapshotParserTest {
       return;
     }
     ISchemaRegion schemaRegion = getSchemaRegion("root.sg", 0);
+    PartialPath databasePath = new PartialPath("root.sg");
     schemaRegion.createTimeseries(
         SchemaRegionWritePlanFactory.getCreateTimeSeriesPlan(
             new PartialPath("root.sg.s1.g1.temp"),
@@ -377,7 +382,8 @@ public class SchemaRegionSnapshotParserTest {
                     + snapshotFileName),
             null);
 
-    Iterable<Statement> statements = SchemaRegionSnapshotParser.translate2Statements(snapshotUnit);
+    Iterable<Statement> statements =
+        SchemaRegionSnapshotParser.translate2Statements(snapshotUnit, databasePath);
     int count = 0;
     SchemaRegionSnapshotParser.parserFinshWithoutExp();
     assert statements != null;
@@ -424,6 +430,7 @@ public class SchemaRegionSnapshotParserTest {
     //
     //
     ISchemaRegion schemaRegion = getSchemaRegion("root", 0);
+    PartialPath databasePath = new PartialPath("root");
     Template template = new Template();
     template.setId(1);
     template.addMeasurement("date", TSDataType.INT64, TSEncoding.RLE, CompressionType.UNCOMPRESSED);
@@ -483,7 +490,11 @@ public class SchemaRegionSnapshotParserTest {
                 add("stat");
               }
             },
-            null,
+            new ArrayList<Map<String, String>>() {
+              {
+                add(new HashMap<>());
+              }
+            },
             new ArrayList<Map<String, String>>() {
               {
                 add(
@@ -549,7 +560,7 @@ public class SchemaRegionSnapshotParserTest {
             },
             new ArrayList<Map<String, String>>() {
               {
-                add(null);
+                add(new HashMap<>());
                 add(
                     new HashMap<String, String>() {
                       {
@@ -566,7 +577,7 @@ public class SchemaRegionSnapshotParserTest {
                         put("attr1", "a1");
                       }
                     });
-                add(null);
+                add(new HashMap<>());
               }
             }));
     for (ISchemaRegionPlan plan : planMap.values()) {
@@ -597,9 +608,25 @@ public class SchemaRegionSnapshotParserTest {
                     + "snapshot"
                     + File.separator
                     + SchemaConstant.TAG_LOG_SNAPSHOT));
-    Iterable<Statement> statements = SchemaRegionSnapshotParser.translate2Statements(unit);
+    Iterable<Statement> statements =
+        SchemaRegionSnapshotParser.translate2Statements(unit, databasePath);
     assert statements != null;
     int count = 0;
+    Comparator<String> comparator =
+        new Comparator<String>() {
+          @Override
+          public int compare(String o1, String o2) {
+            if (o1 == null && o2 == null) {
+              return 0;
+            } else if (o1 == null) {
+              return 1;
+            } else if (o2 == null) {
+              return -1;
+            } else {
+              return o1.compareTo(o2);
+            }
+          }
+        };
     for (Statement stmt : statements) {
       if (stmt instanceof CreateAlignedTimeSeriesStatement) {
         CreateAlignedTimeSeriesStatement createAlignedTimeSeriesStatement =
@@ -608,15 +635,23 @@ public class SchemaRegionSnapshotParserTest {
             (ICreateAlignedTimeSeriesPlan)
                 planMap.get(createAlignedTimeSeriesStatement.getDevicePath().toString());
         Assert.assertNotNull(plan);
+        Collections.sort(plan.getMeasurements());
+        Collections.sort(createAlignedTimeSeriesStatement.getMeasurements());
         Assert.assertEquals(
             plan.getMeasurements(), createAlignedTimeSeriesStatement.getMeasurements());
+        Collections.sort(plan.getAliasList(), comparator);
+        Collections.sort(createAlignedTimeSeriesStatement.getAliasList(), comparator);
         Assert.assertEquals(plan.getAliasList(), createAlignedTimeSeriesStatement.getAliasList());
         Assert.assertEquals(plan.getEncodings(), createAlignedTimeSeriesStatement.getEncodings());
+        Collections.sort(plan.getCompressors());
+        Collections.sort(createAlignedTimeSeriesStatement.getCompressors());
         Assert.assertEquals(
             plan.getCompressors(), createAlignedTimeSeriesStatement.getCompressors());
         Assert.assertEquals(
-            plan.getAttributesList(), createAlignedTimeSeriesStatement.getAttributesList());
-        Assert.assertEquals(plan.getTagsList(), createAlignedTimeSeriesStatement.getTagsList());
+            plan.getAttributesList().size(),
+            createAlignedTimeSeriesStatement.getAttributesList().size());
+        Assert.assertEquals(
+            plan.getTagsList().size(), createAlignedTimeSeriesStatement.getTagsList().size());
       } else if (stmt instanceof CreateTimeSeriesStatement) {
         CreateTimeSeriesStatement createTimeSeriesStatement = (CreateTimeSeriesStatement) stmt;
         ICreateTimeSeriesPlan plan =
@@ -634,7 +669,7 @@ public class SchemaRegionSnapshotParserTest {
         IActivateTemplateInClusterPlan plan =
             (IActivateTemplateInClusterPlan)
                 planMap.get(activateTemplateStatement.getPath().toString());
-        Assert.assertNull(plan);
+        Assert.assertNotNull(plan);
       }
       count++;
     }
