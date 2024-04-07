@@ -348,6 +348,11 @@ public class FragmentInstanceContext extends QueryContext {
     }
     dataRegion.readLock();
     try {
+      Thread.sleep(30 * 1000);
+    } catch (Exception e) {
+      //
+    }
+    try {
       List<PartialPath> pathList = new ArrayList<>();
       Set<String> selectedDeviceIdSet = new HashSet<>();
       for (PartialPath path : sourcePaths) {

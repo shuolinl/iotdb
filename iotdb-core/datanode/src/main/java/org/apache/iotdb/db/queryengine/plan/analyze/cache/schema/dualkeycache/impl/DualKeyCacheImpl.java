@@ -149,11 +149,12 @@ class DualKeyCacheImpl<FK, SK, V, T extends ICacheEntry<SK, V>>
 
   @Override
   public void put(FK firstKey, SK secondKey, V value) {
-    int usedMemorySize = putToCache(firstKey, secondKey, value);
-    cacheStats.increaseMemoryUsage(usedMemorySize);
-    if (cacheStats.isExceedMemoryCapacity()) {
-      executeCacheEviction(usedMemorySize);
-    }
+    return;
+    //    int usedMemorySize = putToCache(firstKey, secondKey, value);
+    //    cacheStats.increaseMemoryUsage(usedMemorySize);
+    //    if (cacheStats.isExceedMemoryCapacity()) {
+    //      executeCacheEviction(usedMemorySize);
+    //    }
   }
 
   private int putToCache(FK firstKey, SK secondKey, V value) {

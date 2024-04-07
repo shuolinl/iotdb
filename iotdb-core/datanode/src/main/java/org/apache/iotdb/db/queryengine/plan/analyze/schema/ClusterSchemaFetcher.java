@@ -169,6 +169,11 @@ public class ClusterSchemaFetcher implements ISchemaFetcher {
     context.addAcquiredLockNum();
     schemaCache.takeReadLock();
     try {
+      Thread.sleep(20 * 1000);
+    } catch (Exception e) {
+      //
+    }
+    try {
       Pair<Template, PartialPath> templateSetInfo =
           templateManager.checkTemplateSetInfo(schemaComputationWithAutoCreation.getDevicePath());
       List<Integer> indexOfMissingMeasurements;

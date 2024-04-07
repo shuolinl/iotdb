@@ -1948,6 +1948,11 @@ public class DataRegion implements IDataRegionForQuery {
 
       Set<PartialPath> devicePaths = new HashSet<>(pattern.getDevicePathPattern());
 
+      try {
+        Thread.sleep(20 * 1000);
+      } catch (Exception e) {
+        // s
+      }
       // delete Last cache record if necessary
       DataNodeSchemaCache.getInstance().takeWriteLock();
       try {

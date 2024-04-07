@@ -232,8 +232,7 @@ public class TimeSeriesSchemaCache {
             measurementPath.getMeasurementSchema(),
             measurementPath.getTagMap(),
             measurementPath.isUnderAlignedEntity());
-    dualKeyCache.put(
-        measurementPath.getDevicePath(), measurementPath.getMeasurement(), schemaCacheEntry);
+    return;
   }
 
   public TimeValuePair getLastCache(PartialPath seriesPath) {

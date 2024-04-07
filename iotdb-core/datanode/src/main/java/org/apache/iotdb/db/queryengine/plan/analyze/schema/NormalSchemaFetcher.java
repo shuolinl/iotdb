@@ -32,6 +32,9 @@ import org.apache.iotdb.db.queryengine.plan.analyze.cache.schema.DataNodeSchemaC
 import org.apache.iotdb.tsfile.file.metadata.enums.TSDataType;
 import org.apache.iotdb.tsfile.utils.Pair;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -39,6 +42,7 @@ import java.util.stream.Collectors;
 class NormalSchemaFetcher {
 
   private final IoTDBConfig config = IoTDBDescriptor.getInstance().getConfig();
+  private static final Logger LOGGER = LoggerFactory.getLogger(NormalSchemaFetcher.class);
 
   private final DataNodeSchemaCache schemaCache;
 
@@ -119,6 +123,7 @@ class NormalSchemaFetcher {
     List<String> missedPathStringOfLogicalView = missedIndexAndPathString.right;
     // all schema can be taken from cache
     if (indexOfMissingMeasurements.isEmpty() && indexOfMissingLogicalView.isEmpty()) {
+      LOGGER.warn("fetch return");
       return indexOfMissingMeasurements;
     }
     // [Step 3] Fetch 1. fetch schema from remote. Process logical view first; then process
