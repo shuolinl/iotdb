@@ -19,6 +19,12 @@
 
 package org.apache.iotdb.db.queryengine.plan.relational.sql.tree;
 
+import org.apache.iotdb.common.rpc.thrift.TSStatus;
+import org.apache.iotdb.commons.auth.entity.PrivilegeType;
+import org.apache.iotdb.db.auth.AuthorityChecker;
+import org.apache.iotdb.db.exception.sql.SemanticException;
+import org.apache.iotdb.rpc.TSStatusCode;
+
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
@@ -93,6 +99,38 @@ public class Query extends Statement {
   @Override
   public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
     return visitor.visitQuery(this, context);
+  }
+
+  @Override
+  public TSStatus checkPermissionBeforeProcess(String userName, String databaseName) {
+    if (AuthorityChecker.SUPER_USER.equals(userName)) {
+      return new TSStatus(TSStatusCode.SUCCESS_STATUS.getStatusCode());
+    }
+
+    if (databaseName == null) {
+      throw new SemanticException("unknown database");
+    }
+    String tableName = null;
+    if (this.queryBody instanceof QuerySpecification) {
+      QuerySpecification specification = (QuerySpecification) this.queryBody;
+      if (specification.getFrom().get() instanceof Table) {
+        Table table = (Table) specification.getFrom().get();
+        tableName = table.getName().toString();
+      }
+    }
+
+    if (null == tableName) {
+      throw new SemanticException("unknown table");
+    }
+    return AuthorityChecker.getTSStatus(
+        AuthorityChecker.checkDBPermision(userName, databaseName, PrivilegeType.READ_DATA.ordinal())
+            || AuthorityChecker.checkDBPermision(
+                userName, databaseName, PrivilegeType.WRITE_DATA.ordinal())
+            || AuthorityChecker.checkTBPermission(
+                userName, databaseName, tableName, PrivilegeType.WRITE_DATA.ordinal())
+            || AuthorityChecker.checkTBPermission(
+                userName, databaseName, tableName, PrivilegeType.READ_DATA.ordinal()),
+        "NEED ONE PRIVILEGES OF DB OR TABLE");
   }
 
   @Override
